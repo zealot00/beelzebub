@@ -37,3 +37,11 @@ core:
     enabled: false
     uri: ""
     auth-token: ""
+  # Sample store: keeps the payloads the attackers drop on the decoys.
+  # The files are named after their SHA-256, so the attacker never
+  # influences a path. Treat the directory as hostile: never serve it.
+  evidence:
+    enabled: false
+    path: ./samples
+    minSizeBytes: 64
+    maxSizeBytes: 1048576

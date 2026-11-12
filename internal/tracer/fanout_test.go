@@ -223,3 +223,56 @@ func TestSetStrategyReplacesThePreviousSinks(t *testing.T) {
 	assert.Equal(t, int32(0), first, "the replaced sink must not receive events anymore")
 	assert.Equal(t, int32(1), second)
 }
+
+// TestEveryConsumerGetsItsOwnCopyOfTheMutableFields is the copy safety
+// guarantee: a consumer that mutates the metadata of an event it received
+// must not change what the other consumers see.
+//
+// Without the copy, the evidence recorded by one output could be altered by
+// another, and the interaction would no longer match what happened.
+func TestEveryConsumerGetsItsOwnCopyOfTheMutableFields(t *testing.T) {
+	tr := GetInstance(nil)
+
+	var mu sync.Mutex
+	var first, second Event
+
+	tr.SetStrategies([]Strategy{
+		func(event Event) {
+			// The first consumer tampers with the metadata it receives.
+			if event.Metadata != nil {
+				event.Metadata["tampered"] = "true"
+			}
+			mu.Lock()
+			first = event
+			mu.Unlock()
+		},
+		func(event Event) {
+			mu.Lock()
+			second = event
+			mu.Unlock()
+		},
+	})
+	defer tr.SetStrategies(nil)
+
+	tr.TraceEvent(Event{ID: "copy-1", Metadata: map[string]string{"original": "value"}})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		got := first.ID != "" && second.ID != ""
+		mu.Unlock()
+		if got {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotEmpty(t, first.ID)
+	require.NotEmpty(t, second.ID)
+
+	assert.Equal(t, "true", first.Metadata["tampered"], "the first consumer sees its own change")
+	assert.NotContains(t, second.Metadata, "tampered", "the second consumer must not see it")
+	assert.Equal(t, "value", second.Metadata["original"])
+}

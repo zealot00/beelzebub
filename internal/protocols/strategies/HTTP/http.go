@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/plugins"
@@ -32,13 +33,26 @@ func (httpStrategy HTTPStrategy) Init(servConf parser.BeelzebubServiceConfigurat
 	serverMux.HandleFunc("/", newHTTPHandler(servConf, tr))
 	go func() {
 		var err error
+		// The timeouts bound the resources a single connection can hold: a
+		// slow client must not be able to keep a handler, and its memory,
+		// alive indefinitely. Without them a handful of stalled connections
+		// would degrade the decoy.
+		server := &http.Server{
+			Addr:              servConf.Address,
+			Handler:           serverMux,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    1 << 20,
+		}
 		// Launch a TLS supporting server if we are supplied a TLS Key and Certificate.
 		// If relative paths are supplied, they are relative to the CWD of the binary.
 		// The can be self-signed, only the client will validate this (or not).
 		if servConf.TLSKeyPath != "" && servConf.TLSCertPath != "" {
-			err = http.ListenAndServeTLS(servConf.Address, servConf.TLSCertPath, servConf.TLSKeyPath, serverMux)
+			err = server.ListenAndServeTLS(servConf.TLSCertPath, servConf.TLSKeyPath)
 		} else {
-			err = http.ListenAndServe(servConf.Address, serverMux)
+			err = server.ListenAndServe()
 		}
 		if err != nil {
 			log.Errorf("error during init HTTP Protocol: %v", err)
@@ -69,7 +83,7 @@ func newHTTPHandler(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tra
 			resp.StatusCode = http.StatusMethodNotAllowed
 			resp.Headers = []string{"Allow:" + strings.Join(allowedMethods, ", ")}
 			resp.Body = http.StatusText(http.StatusMethodNotAllowed)
-			traceRequest(request, tr, parser.Command{}, servConf, "", servConf.TrustedProxiesNets)
+			traceRequest(request, tr, parser.Command{}, servConf, "", servConf.TrustedProxiesNets, nil, "")
 		} else {
 			// If none of the main commands matched, and we have a fallback command configured, process it here.
 			// The regexp is ignored for fallback commands, as they are catch-all for any request.
@@ -109,8 +123,10 @@ func matchHTTPCommand(commands []parser.Command, request *http.Request) (*parser
 
 func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tracer, command parser.Command, request *http.Request) (httpResponse, error) {
 	resp := httpResponse{
-		Body:       command.Handler,
-		Headers:    command.Headers,
+		Body: command.Handler,
+		// The header slice belongs to the service configuration, which is
+		// shared by every request: it must not be appended to in place.
+		Headers:    slices.Clone(command.Headers),
 		StatusCode: command.StatusCode,
 	}
 
@@ -120,24 +136,31 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	if err == nil {
 		body = string(bodyBytes)
 	}
-	traceRequest(request, tr, command, servConf, body, servConf.TrustedProxiesNets)
+
+	// The event is emitted after the plugin answered, so that it can carry
+	// the response and the plugin findings. It is emitted in every case: a
+	// failing plugin must not lose the interaction.
+	var metadata map[string]string
+	var pluginErr error
 
 	if command.Plugin != "" {
 		host, _ := realClientAddr(request, servConf.TrustedProxiesNets)
 
 		if cp, ok := plugin.GetCommand(command.Plugin); ok {
 			cmd := fmt.Sprintf("Method: %s, RequestURI: %s, Body: %s", request.Method, request.RequestURI, body)
-			output, err := cp.Execute(context.Background(), plugin.CommandRequest{
+			output, meta, execErr := plugins.ExecuteCommandPlugin(cp, context.Background(), plugin.CommandRequest{
 				Command:  cmd,
 				ClientIP: host,
 				Protocol: "http",
 				Config:   plugins.ConfigFromServiceConf(servConf),
 			})
-			if err != nil {
+			metadata = meta
+			if execErr != nil {
 				resp.Body = "404 Not Found!"
-				return resp, fmt.Errorf("plugin %q execute error: %w", command.Plugin, err)
+				pluginErr = fmt.Errorf("plugin %q execute error: %w", command.Plugin, execErr)
+			} else {
+				resp.Body = output
 			}
-			resp.Body = output
 		} else if hp, ok := plugin.GetHTTP(command.Plugin); ok {
 			// For HTTP-specific plugins (e.g. MazeHoneypot) that need full
 			// request context and return their own status/headers.
@@ -168,10 +191,16 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 		}
 	}
 
+	traceRequest(request, tr, command, servConf, body, servConf.TrustedProxiesNets, metadata, resp.Body)
+
+	if pluginErr != nil {
+		return resp, pluginErr
+	}
+
 	return resp, nil
 }
 
-func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, servConf parser.BeelzebubServiceConfiguration, body string, trustedProxies []*net.IPNet) {
+func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, servConf parser.BeelzebubServiceConfiguration, body string, trustedProxies []*net.IPNet, metadata map[string]string, commandOutput string) {
 	host, port := realClientAddr(request, trustedProxies)
 
 	remoteAddr := host
@@ -188,19 +217,23 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		UserAgent:       request.UserAgent(),
 		Cookies:         mapCookiesToString(request.Cookies()),
 		Headers:         mapHeaderToString(request.Header),
-		HeadersMap:      request.Header,
-		Status:          tracer.Stateless.String(),
-		RemoteAddr:      remoteAddr,
-		SourceIp:        host,
-		SourcePort:      port,
-		ID:              uuid.New().String(),
-		Description:     servConf.Description,
-		Handler:         command.Name,
+		// The header map is copied: the request owns it, and the event is
+		// dispatched asynchronously.
+		HeadersMap:  cloneHeaderMap(request.Header),
+		Status:      tracer.Stateless.String(),
+		RemoteAddr:  remoteAddr,
+		SourceIp:    host,
+		SourcePort:  port,
+		ID:          uuid.New().String(),
+		Description: servConf.Description,
+		Handler:     command.Name,
 		// HTTP has no transport session to hang an identifier on, so the
 		// source carries one: requests coming from the same peer inside the
 		// session window share a SessionID and a CorrelationKey.
 		SessionID:      tracer.SourceSession(tracer.HTTP.String(), host),
 		CorrelationKey: tracer.SourceKey(tracer.HTTP.String(), servConf.Address, host),
+		CommandOutput:  commandOutput,
+		Metadata:       metadata,
 	}
 	// Capture the TLS details from the request, if provided.
 	if request.TLS != nil {
@@ -278,6 +311,25 @@ func ipInNets(ip net.IP, nets []*net.IPNet) bool {
 		}
 	}
 	return false
+}
+
+// cloneHeaderMap copies the header map of a request.
+//
+// The event outlives the handler, so it must not keep a reference to the
+// map owned by the request.
+func cloneHeaderMap(headers http.Header) map[string][]string {
+	if headers == nil {
+		return nil
+	}
+
+	clone := make(map[string][]string, len(headers))
+	for key, values := range headers {
+		copied := make([]string, len(values))
+		copy(copied, values)
+		clone[key] = copied
+	}
+
+	return clone
 }
 
 func mapHeaderToString(headers http.Header) string {

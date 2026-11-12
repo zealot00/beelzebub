@@ -1,0 +1,110 @@
+# Hardened deployment profile — the outer sandbox.
+#
+# The runtime sandbox holds the attacker: once a decoy is compromised, the
+# attacker must find himself inside a container that cannot reach the
+# production network, cannot read the host filesystem, and cannot escalate.
+#
+# The controls below are the ones Docker can express. The egress rules are
+# the missing half: they live on the host firewall, because a container
+# network does not filter what leaves it. See
+# docs/content/docs/operations/isolation.mdx for the required rules.
+#
+# Usage:
+#   docker compose -f docker-compose.hardened.yml up -d --build
+#
+# Before the first start:
+#   mkdir -p logs samples state
+#   sudo chown -R 65534:65534 logs samples state
+#   chmod 700 logs samples
+
+services:
+  beelzebub:
+    build:
+      context: .
+      args:
+        # Token for cloning private plugins during the image build (from .env).
+        BEELZEBUB_GITHUB_TOKEN: ${BEELZEBUB_GITHUB_TOKEN:-}
+    container_name: beelzebub
+    restart: always
+
+    # 1. Never run as root. The image is built FROM scratch, so there is no
+    #    /etc/passwd: the numeric user is used on purpose.
+    user: "65534:65534"
+
+    # 2. Drop every capability, and give back only the one needed to bind the
+    #    privileged ports. Remove the cap_add line entirely if the decoys only
+    #    listen on high ports.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+
+    # 3. No privilege escalation through the binary or the interpreter.
+    security_opt:
+      - no-new-privileges:true
+
+    # 4. Read-only root filesystem. The writable paths are explicit volumes.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+      - /var/tmp:rw,noexec,nosuid,nodev,size=32m
+
+    # 5. Resource ceilings. The runtime flag --mem-limit-mib is a soft limit
+    #    for the garbage collector; the cgroup limit is the hard one.
+    pids_limit: 256
+    mem_limit: 512m
+    cpus: 1.0
+
+    # 6. The decoys are published on the honeypot address only, so a
+    #    misrouted production request cannot reach them.
+    ports:
+      - "192.168.90.10:22:22"
+      - "192.168.90.10:23:23"
+      - "192.168.90.10:2222:2222"
+      - "192.168.90.10:8080:8080"
+      - "192.168.90.10:8081:8081"
+      - "192.168.90.10:80:80"
+      - "192.168.90.10:3306:3306"
+
+    environment:
+      RABBITMQ_URI: ${RABBITMQ_URI:-}
+      OPEN_AI_SECRET_KEY: ${OPEN_AI_SECRET_KEY:-}
+      # Beelzebub Cloud (from .env, written by install.sh)
+      BEELZEBUB_CLOUD_ENABLED: ${BEELZEBUB_CLOUD_ENABLED:-false}
+      BEELZEBUB_CLOUD_URI: ${BEELZEBUB_CLOUD_URI:-}
+      BEELZEBUB_CLOUD_AUTH_TOKEN: ${BEELZEBUB_CLOUD_AUTH_TOKEN:-}
+      # The syslog pipeline is the only egress the runtime needs by default.
+      BEELZEBUB_SYSLOG_ENABLED: ${BEELZEBUB_SYSLOG_ENABLED:-false}
+      BEELZEBUB_SYSLOG_ADDRESS: ${BEELZEBUB_SYSLOG_ADDRESS:-}
+      BEELZEBUB_SYSLOG_PROTOCOL: ${BEELZEBUB_SYSLOG_PROTOCOL:-tcp}
+
+    # 7. The configuration is read-only: the decoy must not be able to
+    #    rewrite the rules it is supposed to enforce.
+    volumes:
+      - "./configurations:/configurations:ro"
+      - "./state:/state"
+      - "./logs:/logs"
+      - "./samples:/samples"
+
+    # 8. The honeypot lives on its own network. It is deliberately NOT
+    #    attached to the network of the production systems.
+    networks:
+      honeypot:
+        aliases:
+          - honey-web
+          - honey-db
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  honeypot:
+    driver: bridge
+    # The address of the honeypot host inside the network.
+    ipam:
+      config:
+        - subnet: 172.28.90.0/24
+          gateway: 172.28.90.1

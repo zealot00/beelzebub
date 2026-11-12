@@ -243,7 +243,12 @@ func (tracer *tracer) Subscribe(handler plugin.EventHandler) func() {
 	}
 }
 
-// dispatch delivers an event to every active sink.
+// dispatch delivers an event to every active sink and plugin subscriber.
+//
+// Every consumer receives its own copy of the mutable parts of the event:
+// the metadata map and the header map. Without this, a consumer that keeps a
+// reference — or that mutates it — would corrupt the evidence seen by the
+// others, and the recorded interaction would no longer match what happened.
 func (tracer *tracer) dispatch(event Event) {
 	tracer.strategyMutex.RLock()
 	sinks := make([]Strategy, len(tracer.strategies))
@@ -261,12 +266,44 @@ func (tracer *tracer) dispatch(event Event) {
 		if sink == nil {
 			continue
 		}
-		sink(event)
+		sink(cloneEvent(event))
 	}
 
 	for _, handler := range handlers {
-		handler(event)
+		handler(cloneEvent(event))
 	}
+}
+
+// cloneEvent detaches the mutable fields of an event.
+//
+// The scalar fields are copied by the assignment. The maps are copied
+// explicitly, including the value slices of the header map, so that the
+// returned event never shares a mutable structure with the original.
+func cloneEvent(event Event) Event {
+	clone := event
+
+	if event.Metadata != nil {
+		clone.Metadata = make(map[string]string, len(event.Metadata))
+		for key, value := range event.Metadata {
+			clone.Metadata[key] = value
+		}
+	}
+
+	if event.HeadersMap != nil {
+		clone.HeadersMap = make(map[string][]string, len(event.HeadersMap))
+		for key, values := range event.HeadersMap {
+			copied := make([]string, len(values))
+			copy(copied, values)
+			clone.HeadersMap[key] = copied
+		}
+	}
+
+	if event.Payload != nil {
+		clone.Payload = make([]byte, len(event.Payload))
+		copy(clone.Payload, event.Payload)
+	}
+
+	return clone
 }
 
 func (tracer *tracer) TraceEvent(event Event) {
@@ -278,7 +315,7 @@ func (tracer *tracer) TraceEvent(event Event) {
 		event.Sequence = tracer.nextSequence(event.SessionID)
 	}
 
-	tracer.eventsChan <- event
+	tracer.eventsChan <- cloneEvent(event)
 
 	tracer.updatePrometheusCounters(event.Protocol)
 }

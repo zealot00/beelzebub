@@ -49,6 +49,62 @@ type LLMHoneypot struct {
 	RateLimitEnabled        bool
 	RateLimitRequests       int
 	RateLimitWindowSeconds  int
+	// MaxInputLength caps the attacker content sent to the model.
+	MaxInputLength int
+	// MaxOutputLength caps the answer returned to the attacker.
+	MaxOutputLength int
+	// RedactCredentials masks the credentials found in the attacker content
+	// before it leaves the perimeter.
+	RedactCredentials bool
+
+	// findings records what the guardrails did with the request.
+	findings llmFindings
+}
+
+// llmFindings records the guardrail outcome of a single request.
+type llmFindings struct {
+	// injection is set when the attacker tried to take over the instruction
+	// channel.
+	injection bool
+	// truncated is set when the attacker content was cut before the model.
+	truncated bool
+	// redacted is set when credentials were masked.
+	redacted bool
+	// guardrail names the guardrail that blocked the request.
+	guardrail string
+	// refusal is set when the model refused and the answer was replaced.
+	refusal bool
+}
+
+// eventMetadata returns the guardrail findings as event metadata.
+//
+// The findings are the signal that an AI agent, and not a human, drove the
+// interaction: an injection attempt, a truncated payload, a redacted
+// credential or a replaced refusal.
+func (llmHoneypot *LLMHoneypot) eventMetadata() map[string]string {
+	metadata := map[string]string{}
+
+	if llmHoneypot.findings.injection {
+		metadata["llm_injection"] = "true"
+	}
+	if llmHoneypot.findings.truncated {
+		metadata["llm_truncated"] = "true"
+	}
+	if llmHoneypot.findings.redacted {
+		metadata["llm_credentials_redacted"] = "true"
+	}
+	if llmHoneypot.findings.guardrail != "" {
+		metadata["llm_guardrail"] = llmHoneypot.findings.guardrail
+	}
+	if llmHoneypot.findings.refusal {
+		metadata["llm_refusal_replaced"] = "true"
+	}
+
+	if len(metadata) == 0 {
+		return nil
+	}
+
+	return metadata
 }
 
 type Choice struct {
@@ -100,6 +156,11 @@ const (
 	Ollama LLMProvider = iota
 	OpenAI
 )
+
+// String returns the name of the provider.
+func (provider LLMProvider) String() string {
+	return [...]string{"ollama", "openai"}[provider]
+}
 
 func FromStringToLLMProvider(llmProvider string) (LLMProvider, error) {
 	switch strings.ToLower(llmProvider) {
@@ -153,7 +214,7 @@ func (llmHoneypot *LLMHoneypot) buildPrompt(command string) ([]Message, error) {
 
 	switch llmHoneypot.Protocol {
 	case tracer.SSH, tracer.TELNET:
-		prompt = systemPromptVirtualizeLinuxTerminal
+		prompt = systemPromptVirtualizeLinuxTerminalV2
 		if llmHoneypot.CustomPrompt != "" {
 			prompt = llmHoneypot.CustomPrompt
 		}
@@ -169,11 +230,9 @@ func (llmHoneypot *LLMHoneypot) buildPrompt(command string) ([]Message, error) {
 			Role:    ASSISTANT.String(),
 			Content: "/home/user",
 		})
-		for _, history := range llmHoneypot.Histories {
-			messages = append(messages, history)
-		}
+		messages = append(messages, llmHoneypot.sanitizeHistory()...)
 	case tracer.HTTP:
-		prompt = systemPromptVirtualizeHTTPServer
+		prompt = systemPromptVirtualizeHTTPServerV2
 		if llmHoneypot.CustomPrompt != "" {
 			prompt = llmHoneypot.CustomPrompt
 		}
@@ -197,18 +256,64 @@ func (llmHoneypot *LLMHoneypot) buildPrompt(command string) ([]Message, error) {
 			Role:    SYSTEM.String(),
 			Content: llmHoneypot.CustomPrompt,
 		})
-		for _, history := range llmHoneypot.Histories {
-			messages = append(messages, history)
-		}
+		messages = append(messages, llmHoneypot.sanitizeHistory()...)
 	default:
 		return nil, errors.New("no prompt for protocol selected")
 	}
+
+	// The attacker content is fenced and sanitized: it is data, and it must
+	// not carry the credentials it may contain out of the perimeter.
+	prepared, truncated := llmHoneypot.prepareInput(command)
+	if truncated {
+		log.WithField("protocol", llmHoneypot.Protocol.String()).
+			Debug("The attacker input has been truncated before reaching the model")
+	}
+
 	messages = append(messages, Message{
 		Role:    USER.String(),
-		Content: command,
+		Content: wrapUntrusted(prepared),
 	})
 
 	return messages, nil
+}
+
+// prepareInput sanitizes the attacker content before it is sent to the model.
+func (llmHoneypot *LLMHoneypot) prepareInput(command string) (string, bool) {
+	if DetectInjection(command) {
+		llmHoneypot.findings.injection = true
+	}
+
+	prepared, truncated := prepareAttackerInput(command, llmHoneypot.MaxInputLength, llmHoneypot.RedactCredentials)
+
+	if truncated {
+		llmHoneypot.findings.truncated = true
+	}
+	if llmHoneypot.RedactCredentials && prepared != stripControlCharacters(command) {
+		llmHoneypot.findings.redacted = true
+	}
+
+	return prepared, truncated
+}
+
+// sanitizeHistory fences the previous turns of the conversation.
+//
+// The history is attacker controlled as well: without this fence an
+// injection planted in an early turn stays in the context of every later one.
+func (llmHoneypot *LLMHoneypot) sanitizeHistory() []Message {
+	if len(llmHoneypot.Histories) == 0 {
+		return nil
+	}
+
+	messages := make([]Message, 0, len(llmHoneypot.Histories))
+	for _, history := range llmHoneypot.Histories {
+		prepared, _ := llmHoneypot.prepareInput(history.Content)
+		messages = append(messages, Message{
+			Role:    history.Role,
+			Content: wrapUntrusted(prepared),
+		})
+	}
+
+	return messages
 }
 
 func (llmHoneypot *LLMHoneypot) buildInputValidationPrompt(command string) ([]Message, error) {
@@ -289,7 +394,8 @@ func (llmHoneypot *LLMHoneypot) openAICaller(messages []Message) (string, error)
 		llmHoneypot.Host = openAIEndpoint
 	}
 
-	log.Debug(string(requestJSON))
+	llmHoneypot.logPromptSummary(messages)
+
 	response, err := llmHoneypot.client.R().
 		SetHeader("Content-Type", "application/json").
 		SetBody(requestJSON).
@@ -300,7 +406,6 @@ func (llmHoneypot *LLMHoneypot) openAICaller(messages []Message) (string, error)
 	if err != nil {
 		return "", err
 	}
-	log.Debug(response)
 
 	if len(response.Result().(*Response).Choices) == 0 {
 		return "", errors.New("no choices")
@@ -325,7 +430,8 @@ func (llmHoneypot *LLMHoneypot) ollamaCaller(messages []Message) (string, error)
 		llmHoneypot.Host = ollamaEndpoint
 	}
 
-	log.Debug(string(requestJSON))
+	llmHoneypot.logPromptSummary(messages)
+
 	response, err := llmHoneypot.client.R().
 		SetHeader("Content-Type", "application/json").
 		SetBody(requestJSON).
@@ -335,9 +441,27 @@ func (llmHoneypot *LLMHoneypot) ollamaCaller(messages []Message) (string, error)
 	if err != nil {
 		return "", err
 	}
-	log.Debug(response)
 
 	return removeQuotes(response.Result().(*Response).Message.Content), nil
+}
+
+// logPromptSummary logs the shape of the request instead of its content.
+//
+// The prompt carries the attacker input and the system instructions: logging
+// it would turn the debug log into a second copy of everything the decoy is
+// supposed to protect.
+func (llmHoneypot *LLMHoneypot) logPromptSummary(messages []Message) {
+	total := 0
+	for _, message := range messages {
+		total += len(message.Content)
+	}
+
+	log.WithFields(log.Fields{
+		"model":         llmHoneypot.Model,
+		"provider":      llmHoneypot.Provider.String(),
+		"messages":      len(messages),
+		"content_bytes": total,
+	}).Debug("LLM request")
 }
 
 // getRateLimiter returns a rate limiter for the given client IP and if it doesn't exist,
@@ -431,6 +555,13 @@ func (llmHoneypot *LLMHoneypot) ExecuteModel(command string, clientIP string) (s
 		}
 	}
 
+	// A refusal or a broken character would give the decoy away, and an
+	// unbounded answer would let the attacker amplify the traffic.
+	if containsAIRefusal(response) {
+		llmHoneypot.findings.refusal = true
+	}
+	response = sanitizeLLMOutput(response, llmHoneypot.Protocol, command, llmHoneypot.MaxOutputLength)
+
 	return response, err
 }
 
@@ -447,8 +578,8 @@ func (llmHoneypot *LLMHoneypot) isInputValid(command string) error {
 		return err
 	}
 
-	normalized := strings.TrimSpace(strings.ToLower(validationResult))
-	if normalized == `malicious` {
+	if isMaliciousVerdict(validationResult) {
+		llmHoneypot.findings.guardrail = "input-blocked"
 		return errors.New("guardrail detected malicious input")
 	}
 
@@ -479,8 +610,8 @@ func (llmHoneypot *LLMHoneypot) isOutputValid(response string) error {
 		return err
 	}
 
-	normalized := strings.TrimSpace(strings.ToLower(validationResult))
-	if normalized == `malicious` {
+	if isMaliciousVerdict(validationResult) {
+		llmHoneypot.findings.guardrail = "output-blocked"
 		return errors.New("guardrail detected malicious output")
 	}
 

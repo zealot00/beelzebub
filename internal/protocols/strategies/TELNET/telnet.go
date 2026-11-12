@@ -210,17 +210,19 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 				if handlerName == "" {
 					handlerName = "configured_regex"
 				}
+				var metadata map[string]string
 
 				// Plugin dispatch via registry
 				if command.Plugin != "" {
 					if cp, ok := plugin.GetCommand(command.Plugin); ok {
-						output, err := cp.Execute(context.Background(), plugin.CommandRequest{
+						output, meta, err := plugins.ExecuteCommandPlugin(cp, context.Background(), plugin.CommandRequest{
 							Command:  commandInput,
 							ClientIP: host,
 							Protocol: "telnet",
 							History:  plugins.MessagesToPlugin(histories),
 							Config:   plugins.ConfigFromServiceConf(servConf),
 						})
+						metadata = meta
 						if err != nil {
 							log.Errorf("plugin %q execute error: %s", command.Plugin, err.Error())
 							commandOutput = "command not found"
@@ -262,6 +264,7 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 					User:           username,
 					Description:    servConf.Description,
 					Handler:        handlerName,
+					Metadata:       metadata,
 				})
 
 				break // Found match, exit command loop

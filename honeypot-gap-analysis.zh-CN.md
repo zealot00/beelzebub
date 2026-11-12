@@ -13,8 +13,24 @@
 | **P0-2 多路输出** | ✅ 已实现 | `setTraceStrategies` / `addTraceStrategy`;`director.go` 改为 fan-out。**修掉了 Cloud 覆盖 RabbitMQ 的 bug**;顺带修了 `build()` 复制 builder 导致日志文件/RabbitMQ 通道/syslog 客户端不释放的问题 |
 | **P0-3 统一事件模型** | ✅ 已实现(仅新增字段) | `Event` 新增 `EventID` / `SessionID` / `ConnID` / `Sequence` / `CorrelationKey`,全部 `omitempty`;HTTP/MCP 补来源会话;SSH/TELNET 认证尝试回挂到连接 |
 | **syslog 管线**(附加需求) | ✅ 已实现 | `internal/builder/syslog.go`,RFC 5424 + RFC 6587,配置 `core.tracings.syslog`,支持 tcp/udp、TLS、懒连接与断线重连 |
-| P0-5 样本落盘 | ⏳ 未开始 | 依赖 P0-1(已完成),可立即开工 |
-| P0-6 LLM 脱敏 | ⏳ 未开始 | 独立小改,建议下一个 PR |
+| P0-5 样本落盘 + 去重 | ✅ 已实现 | `internal/evidence/store.go`;路径**只由 sha256 派生**,攻击者提供的文件名仅作 JSON 元数据;0600/0700;订阅事件总线 |
+| P0-6 LLM 越狱防护 | ✅ 已实现(升级) | `internal/plugins/llm_guard.go`:输入围栏 + 系统提示加固 + 护栏判定修正 + 拒答兜底 + 凭据脱敏 + 长度上限;不再记录完整 prompt |
+| **隔离加固(本轮新增)** | ✅ 已实现 | 外层:`docker-compose.hardened.yml`(非 root / cap_drop ALL / no-new-privileges / 只读根fs / 资源上限 / 独立网络);内层:LLM 护栏 + 样本库;日志权限 0666→0600;HTTP/MCP 补读写超时 |
+| **拷贝安全修复(本轮新增)** | ✅ 已实现 | 修 3 个确认缺陷(见下) |
+
+**本轮修复的 3 个拷贝安全缺陷**(全部有回归测试,`historystore` 那条用 `-race` 验证过「回退修复即 DATA RACE + 测试 FAIL」):
+
+| 缺陷 | 后果 | 修复 |
+|---|---|---|
+| `historystore.Query()` 返回内部 slice 未拷贝 | **同 IP 同用户名的并发 SSH/TELNET 连接互相踩内存**(data race),且送进模型的上下文会混入另一条连接的输入 | `Query()` 返回副本 |
+| 事件里的 `Metadata` / `HeadersMap` 是可变引用 | 多路输出/多订阅者之间**互相污染证据** | `tracer.cloneEvent()` 逐消费者深拷贝;HTTP 侧 `cloneHeaderMap` |
+| evidence 样本从**有损字符串**重建字节 | latin1 二进制服务的落盘样本 ≠ 攻击者原始字节 → **sha256 去重键失真**,POC 库不可信 | `Event` 新增精确字节通道 `Payload`(不序列化),TCP 策略填原始帧 |
+
+**已知限制(下一批)**:
+- `Payload` 只在 TCP 策略填充;HTTP body 是文本,走 `Body` 字段即可
+- SSH/TELNET 的 `sessionKey` 不含端口/服务标识 → 同 IP 同用户名的不同 SSH 服务仍共享历史
+- 插件仍是**进程内任意代码**,不在沙盒模型覆盖范围内
+- 出网白名单必须由**宿主机防火墙**实施,容器网络无法表达
 
 **新增的可用能力**(此前完全不存在):
 - 插件可**订阅事件流** → 情报富化 / 工具指纹 / 证据处理终于有了落脚点

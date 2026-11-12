@@ -52,15 +52,17 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					for _, command := range servConf.Commands {
 						if command.Regex.MatchString(sess.RawCommand()) {
 							commandOutput := command.Handler
+							var metadata map[string]string
 							if command.Plugin != "" {
 								if cp, ok := plugin.GetCommand(command.Plugin); ok {
-									output, err := cp.Execute(context.Background(), plugin.CommandRequest{
+									output, meta, err := plugins.ExecuteCommandPlugin(cp, context.Background(), plugin.CommandRequest{
 										Command:  sess.RawCommand(),
 										ClientIP: host,
 										Protocol: "ssh",
 										History:  plugins.MessagesToPlugin(histories),
 										Config:   plugins.ConfigFromServiceConf(servConf),
 									})
+									metadata = meta
 									if err != nil {
 										log.Errorf("plugin %q execute error: %s", command.Plugin, err.Error())
 										commandOutput = "command not found"
@@ -96,6 +98,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 								Command:        sess.RawCommand(),
 								CommandOutput:  commandOutput,
 								Handler:        command.Name,
+								Metadata:       metadata,
 							})
 							return
 						}
@@ -135,15 +138,17 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					for _, command := range servConf.Commands {
 						if command.Regex.MatchString(commandInput) {
 							commandOutput := command.Handler
+							var metadata map[string]string
 							if command.Plugin != "" {
 								if cp, ok := plugin.GetCommand(command.Plugin); ok {
-									output, err := cp.Execute(context.Background(), plugin.CommandRequest{
+									output, meta, err := plugins.ExecuteCommandPlugin(cp, context.Background(), plugin.CommandRequest{
 										Command:  commandInput,
 										ClientIP: host,
 										Protocol: "ssh",
 										History:  plugins.MessagesToPlugin(histories),
 										Config:   plugins.ConfigFromServiceConf(servConf),
 									})
+									metadata = meta
 									if err != nil {
 										log.Errorf("plugin %q execute error: %s", command.Plugin, err.Error())
 										commandOutput = "command not found"
@@ -177,6 +182,7 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 								Protocol:       tracer.SSH.String(),
 								Description:    servConf.Description,
 								Handler:        command.Name,
+								Metadata:       metadata,
 							})
 							break // Inner range over commands.
 						}

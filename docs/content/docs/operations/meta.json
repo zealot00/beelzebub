@@ -1,4 +1,13 @@
 {
   "title": "Operations",
-  "pages": ["docker", "kubernetes", "hosting", "observability", "integrations", "syslog", "production-safety"]
+  "pages": [
+    "docker",
+    "kubernetes",
+    "hosting",
+    "observability",
+    "integrations",
+    "isolation",
+    "syslog",
+    "production-safety"
+  ]
 }

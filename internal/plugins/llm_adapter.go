@@ -22,14 +22,26 @@ func (l *llmPlugin) Metadata() plugin.Metadata {
 }
 
 func (l *llmPlugin) Execute(ctx context.Context, req plugin.CommandRequest) (string, error) {
+	output, _, err := l.ExecuteWithMetadata(ctx, req)
+	return output, err
+}
+
+// ExecuteWithMetadata returns the generated response together with the
+// guardrail findings.
+//
+// The findings describe what the guardrails did — an injection attempt, a
+// truncated input, a redacted credential, a replaced refusal — and are the
+// signal that tells an analyst the decoy was driven by an AI agent rather
+// than by a human.
+func (l *llmPlugin) ExecuteWithMetadata(ctx context.Context, req plugin.CommandRequest) (string, map[string]string, error) {
 	llmProvider, err := FromStringToLLMProvider(req.Config.LLMProvider)
 	if err != nil {
-		return "", fmt.Errorf("llm plugin: %w", err)
+		return "", nil, fmt.Errorf("llm plugin: %w", err)
 	}
 
 	proto, ok := tracer.ProtocolFromString(req.Protocol)
 	if !ok {
-		return "", fmt.Errorf("llm plugin: unknown protocol %q", req.Protocol)
+		return "", nil, fmt.Errorf("llm plugin: unknown protocol %q", req.Protocol)
 	}
 
 	hp := &LLMHoneypot{
@@ -47,9 +59,17 @@ func (l *llmPlugin) Execute(ctx context.Context, req plugin.CommandRequest) (str
 		RateLimitEnabled:        req.Config.RateLimitEnabled,
 		RateLimitRequests:       req.Config.RateLimitRequests,
 		RateLimitWindowSeconds:  req.Config.RateLimitWindowSeconds,
+		MaxInputLength:          req.Config.MaxInputLength,
+		MaxOutputLength:         req.Config.MaxOutputLength,
+		RedactCredentials:       !req.Config.CredentialRedactionDisabled,
 	}
 
-	return InitLLMHoneypot(*hp).ExecuteModel(req.Command, req.ClientIP)
+	response, err := InitLLMHoneypot(*hp).ExecuteModel(req.Command, req.ClientIP)
+	if err != nil {
+		return "", hp.eventMetadata(), err
+	}
+
+	return response, hp.eventMetadata(), nil
 }
 
 func init() {

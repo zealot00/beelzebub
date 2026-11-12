@@ -342,6 +342,7 @@ func ValidateCore(config *BeelzebubCoreConfigurations, filename string) Validate
 	}
 
 	issues = append(issues, validateSyslog(config.Core.Tracings.Syslog, filename)...)
+	issues = append(issues, validateEvidence(config.Core.Evidence, filename)...)
 
 	if config.Core.BeelzebubCloud.Enabled {
 		if config.Core.BeelzebubCloud.URI == "" {
@@ -491,6 +492,49 @@ func validateSyslog(config Syslog, filename string) []ValidationIssue {
 				Filename: filename,
 			})
 		}
+	}
+
+	return issues
+}
+
+// validateEvidence checks the sample store configuration.
+func validateEvidence(config Evidence, filename string) []ValidationIssue {
+	if !config.Enabled {
+		return nil
+	}
+
+	var issues []ValidationIssue
+
+	if config.Path == "" {
+		issues = append(issues, ValidationIssue{
+			Level:    LevelError,
+			Message:  "the evidence store is enabled but path is empty",
+			Filename: filename,
+		})
+	}
+
+	if config.MinSizeBytes < 0 {
+		issues = append(issues, ValidationIssue{
+			Level:    LevelError,
+			Message:  "the evidence minSizeBytes cannot be negative",
+			Filename: filename,
+		})
+	}
+
+	if config.MaxSizeBytes < 0 {
+		issues = append(issues, ValidationIssue{
+			Level:    LevelError,
+			Message:  "the evidence maxSizeBytes cannot be negative",
+			Filename: filename,
+		})
+	}
+
+	if config.MaxSizeBytes > 0 && config.MinSizeBytes > config.MaxSizeBytes {
+		issues = append(issues, ValidationIssue{
+			Level:    LevelError,
+			Message:  "the evidence minSizeBytes cannot be greater than maxSizeBytes",
+			Filename: filename,
+		})
 	}
 
 	return issues

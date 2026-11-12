@@ -41,11 +41,17 @@ func (hs *HistoryStore) HasKey(key string) bool {
 	return ok
 }
 
-// Query returns the value stored at the map
+// Query returns the value stored at the map.
+//
+// The returned slice is a copy: the callers append to it, and the store
+// writes to its own slice under the lock. Sharing the backing array would
+// let two concurrent sessions of the same source write into each other —
+// and would let the context sent to the model mix the turns of two
+// connections.
 func (hs *HistoryStore) Query(key string) []plugins.Message {
 	hs.RLock()
 	defer hs.RUnlock()
-	return hs.sessions[key].Messages
+	return append([]plugins.Message(nil), hs.sessions[key].Messages...)
 }
 
 // Append will add the slice of Mesages to the entry for the key.

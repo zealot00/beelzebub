@@ -12,6 +12,7 @@ import (
 	"github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/MCP"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/protocols/strategies/TELNET"
 
+	"github.com/beelzebub-labs/beelzebub/v3/internal/evidence"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/parser"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/plugins"
 	"github.com/beelzebub-labs/beelzebub/v3/internal/protocols"
@@ -35,6 +36,7 @@ type Builder struct {
 	rabbitMQChannel                *amqp.Channel
 	rabbitMQConnection             *amqp.Connection
 	syslogClient                   *syslogClient
+	evidenceStore                  *evidence.Store
 	logsFile                       *os.File
 	startedServices                []plugin.ServicePlugin
 	servicesCancel                 context.CancelFunc
@@ -58,7 +60,10 @@ func (b *Builder) buildLogger(configurations parser.Logging) error {
 	output := io.Writer(os.Stdout)
 
 	if configurations.LogsPath != "" {
-		logsFile, err := os.OpenFile(configurations.LogsPath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0666)
+		// The log holds the credentials the attackers tried, and the payload
+		// of the interactions: it must not be readable by the other local
+		// users.
+		logsFile, err := os.OpenFile(configurations.LogsPath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
 		if err != nil {
 			return err
 		}
@@ -191,6 +196,17 @@ Deception runtime framework, happy hacking!`)
 	tracerInstance := tracer.GetInstance(nil)
 	tracerInstance.SetStrategies(b.traceStrategies)
 	plugin.SetEventBus(tracerInstance)
+
+	// The sample store observes every event to keep the payloads the
+	// attackers drop on the decoys.
+	if b.beelzebubCoreConfigurations.Core.Evidence.Enabled {
+		store, err := evidence.NewStore(b.beelzebubCoreConfigurations.Core.Evidence)
+		if err != nil {
+			return err
+		}
+		b.evidenceStore = store
+		tracerInstance.Subscribe(store.Handle)
+	}
 
 	// Init Tracer strategies, and set the trace strategy default HTTP
 	var defaultStrategy tracer.Strategy

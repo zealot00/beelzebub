@@ -614,6 +614,20 @@
         },
         "rateLimitWindowSeconds": {
           "type": "integer"
+        },
+        "maxInputLength": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of characters of the attacker input sent to the model. Zero uses the runtime default."
+        },
+        "maxOutputLength": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of characters returned to the attacker. Zero uses the runtime default."
+        },
+        "credentialRedactionDisabled": {
+          "type": "boolean",
+          "description": "Disable the masking of the credentials found in the attacker content. The masking is enabled by default."
         }
       },
       "additionalProperties": false

@@ -73,6 +73,18 @@ type Event struct {
 	// sessions and connections — the key used to rebuild an attack chain that
 	// spans several connections.
 	CorrelationKey string `json:",omitempty"`
+
+	// Payload carries the exact bytes received on the wire, when the protocol
+	// can provide them without loss.
+	//
+	// The string fields are not always faithful: a binary protocol is
+	// re-encoded, and a text protocol is trimmed. The sample store needs the
+	// original bytes to hash and archive what the attacker really sent, so
+	// the TCP strategy fills this field with the raw frame.
+	//
+	// It is deliberately not serialised: the payload would bloat every log
+	// record, and the archive is the place where it belongs.
+	Payload []byte `json:"-"`
 }
 
 // EventHandler is invoked once for every event emitted by the runtime.

@@ -26,7 +26,24 @@ type BeelzebubCoreConfigurations struct {
 		Tracings       Tracings       `yaml:"tracings"`
 		Prometheus     Prometheus     `yaml:"prometheus"`
 		BeelzebubCloud BeelzebubCloud `yaml:"beelzebub-cloud"`
+		Evidence       Evidence       `yaml:"evidence"`
 	}
+}
+
+// Evidence is the struct that contains the configuration of the sample store.
+//
+// The store keeps the payloads the attackers drop on the decoys: the files
+// they upload and the binary blobs they send. The samples are named after
+// their digest, so the attacker never influences a path.
+type Evidence struct {
+	Enabled bool `yaml:"enabled"`
+	// Path is the directory the samples are written to.
+	Path string `yaml:"path"`
+	// MinSizeBytes is the smallest payload that is stored. It keeps the
+	// ordinary commands out of the store.
+	MinSizeBytes int `yaml:"minSizeBytes"`
+	// MaxSizeBytes caps the size of a stored payload.
+	MaxSizeBytes int `yaml:"maxSizeBytes"`
 }
 
 // Logging is the struct that contains the configurations of the logging
@@ -106,6 +123,15 @@ type Plugin struct {
 	RateLimitEnabled        bool   `yaml:"rateLimitEnabled" json:"rateLimitEnabled,omitempty"`
 	RateLimitRequests       int    `yaml:"rateLimitRequests" json:"rateLimitRequests,omitempty"`
 	RateLimitWindowSeconds  int    `yaml:"rateLimitWindowSeconds" json:"rateLimitWindowSeconds,omitempty"`
+	// MaxInputLength caps the attacker content sent to the model. Zero means
+	// the runtime default.
+	MaxInputLength int `yaml:"maxInputLength" json:"maxInputLength,omitempty"`
+	// MaxOutputLength caps the answer returned to the attacker. Zero means the
+	// runtime default.
+	MaxOutputLength int `yaml:"maxOutputLength" json:"maxOutputLength,omitempty"`
+	// CredentialRedactionDisabled opts out of the credential masking. The
+	// masking is enabled by default.
+	CredentialRedactionDisabled bool `yaml:"credentialRedactionDisabled" json:"credentialRedactionDisabled,omitempty"`
 }
 
 // BeelzebubServiceConfiguration is the struct that contains the configurations of the honeypot service

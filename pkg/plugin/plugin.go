@@ -33,6 +33,20 @@ type CommandPlugin interface {
 	Execute(ctx context.Context, req CommandRequest) (string, error)
 }
 
+// ResultCommandPlugin is an optional interface for command plugins that can
+// contribute metadata to the interaction event.
+//
+// The metadata travels with the response, so it stays bound to the request
+// that produced it even when several requests are handled concurrently.
+// Implementations must return a nil or empty map when they have nothing to
+// report.
+type ResultCommandPlugin interface {
+	CommandPlugin
+	// ExecuteWithMetadata returns the response and the fields to attach to
+	// the interaction event.
+	ExecuteWithMetadata(ctx context.Context, req CommandRequest) (string, map[string]string, error)
+}
+
 // HTTPPlugin generates full HTTP responses (status code, headers, body).
 // Use this for plugins that need fine-grained control over the HTTP layer,
 // such as directory-listing generators or custom web honeypots.
@@ -176,6 +190,16 @@ type Config struct {
 	RateLimitEnabled        bool
 	RateLimitRequests       int
 	RateLimitWindowSeconds  int
-	ServerVersion           string
-	ServerName              string
+	// MaxInputLength caps the attacker content sent to the model. Zero means
+	// the runtime default.
+	MaxInputLength int
+	// MaxOutputLength caps the answer returned to the attacker. Zero means the
+	// runtime default.
+	MaxOutputLength int
+	// CredentialRedactionDisabled opts out of the credential masking applied
+	// to the attacker content before it leaves the perimeter. The masking is
+	// enabled by default.
+	CredentialRedactionDisabled bool
+	ServerVersion               string
+	ServerName                  string
 }

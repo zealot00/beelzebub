@@ -118,8 +118,10 @@ func TestBuildPromptTCPWithCustomPrompt(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "act as a binary protocol server", prompt[0].Content)
 	assert.Equal(t, SYSTEM.String(), prompt[0].Role)
-	assert.Equal(t, "previous request", prompt[1].Content)
-	assert.Equal(t, "request", prompt[2].Content)
+	// The previous turn and the current command are both attacker controlled:
+	// they are fenced so that the model reads them as data.
+	assert.Equal(t, wrapUntrusted("previous request"), prompt[1].Content)
+	assert.Equal(t, wrapUntrusted("request"), prompt[2].Content)
 	assert.Equal(t, USER.String(), prompt[2].Role)
 }
 

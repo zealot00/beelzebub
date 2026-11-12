@@ -1,0 +1,112 @@
+---
+title: Isolation
+description: The two sandboxes that keep a compromised decoy from becoming an intrusion, and what each layer is responsible for.
+---
+
+A honeypot is a host that is meant to be attacked. The moment it is exposed,
+the attacker has a foothold on a machine that sits inside your network. The
+isolation model exists to make that foothold worthless.
+
+The model has two layers, and they defend against different things.
+
+## The two sandboxes
+
+| | Outer sandbox | Inner sandbox |
+| --- | --- | --- |
+| Holds | The attacker and the process they compromise | The content the attacker injects |
+| Boundary | The container, the network, the host | The prompt, the event, the filesystem of the samples |
+| Failure means | The attacker pivots into your network | The operator's systems or data are influenced by attacker controlled content |
+| Enforced by | Container profile, host firewall, file permissions | Guardrails, payload fencing, digest addressed storage |
+
+### Outer sandbox — the runtime
+
+The runtime sandbox contains the *process*. Once a decoy is compromised, the
+attacker must find himself on a host that cannot reach the production network,
+cannot read the host filesystem, and cannot escalate.
+
+The controls are split between Docker and the host firewall:
+
+| Control | Where | Why |
+| --- | --- | --- |
+| Non-root user | `docker-compose.hardened.yml` | A root compromise is a host compromise |
+| `cap_drop: ALL`, only `NET_BIND_SERVICE` | `docker-compose.hardened.yml` | No mount, no ptrace, no raw socket |
+| `no-new-privileges` | `docker-compose.hardened.yml` | No setuid escalation |
+| Read-only root filesystem, `noexec` tmpfs | `docker-compose.hardened.yml` | No writable path to execute from |
+| `pids_limit`, `mem_limit`, `cpus` | `docker-compose.hardened.yml` | A fork bomb or a memory bomb stays local |
+| Configuration mounted read-only | `docker-compose.hardened.yml` | The decoy cannot rewrite its own rules |
+| Dedicated network, not the production one | `docker-compose.hardened.yml` | No lateral path by construction |
+| **Egress allowlist** | **Host firewall** | A container network does not filter what leaves it |
+| Log and sample permissions `0600`/`0700` | Runtime | The captured credentials are not world readable |
+
+The egress rules are the half Docker cannot express. On the host, the honeypot
+must be able to **receive** from the monitored segment and to **leave** only
+towards the destinations it needs:
+
+```bash
+# Outbound: only the log server, the DNS resolver, the NTP server.
+iptables -A OUTPUT -o eth0 -p tcp -d 10.20.0.53 --dport 514 -j ACCEPT
+iptables -A OUTPUT -o eth0 -p udp -d 10.20.0.53 --dport 53  -j ACCEPT
+iptables -A OUTPUT -o eth0 -p udp -d 10.20.0.53 --dport 123 -j ACCEPT
+
+# Outbound: block the metadata service and everything else.
+iptables -A OUTPUT -o eth0 -d 169.254.169.254/32 -j REJECT
+iptables -A OUTPUT -o eth0 -j REJECT
+
+# Inbound to the honeypot segment only from the monitored segment.
+iptables -A INPUT -s 10.10.0.0/16 -d 10.20.90.10 -j ACCEPT
+iptables -A INPUT -j REJECT
+```
+
+Two rules matter more than the others:
+
+- **Reject the cloud metadata address.** A decoy that answers with the
+  instance credentials of its host is a decoy that hands the attacker the
+  keys of your cloud account.
+- **Reject the management segment.** The bastion host, the Kubernetes API
+  server, the database consoles and the configuration management must not be
+  reachable from the honeypot.
+
+### Inner sandbox — the content
+
+The inner sandbox contains the *content*. Everything the attacker sends is
+untrusted data: it must never be interpreted as an instruction, it must never
+carry a credential out of the perimeter, and it must never end up in a path.
+
+| Threat | Control | Where |
+| --- | --- | --- |
+| Prompt injection breaking the decoy | The attacker content is fenced between `<<<UNTRUSTED_ATTACKER_INPUT>>>` markers, and the system prompt states that the fenced content is data | `internal/plugins/llm_guard.go` |
+| The model talking like an assistant | The refusal phrasings are detected and replaced by an in-character answer | `internal/plugins/llm_guard.go` |
+| The guardrail being bypassed | The verdict is matched by containment, not equality — "yes, malicious" is now caught | `internal/plugins/llm_guard.go` |
+| A refusal revealing the decoy | The findings are recorded in the event metadata (`llm_injection`, `llm_refusal_replaced`, `llm_guardrail`) | `internal/plugins/llm_guard.go` |
+| Credentials leaving the perimeter | The attacker content is scrubbed of the credential shapes before it reaches the provider | `internal/plugins/llm_guard.go` |
+| A cost bomb | The attacker content is truncated, the answer is capped | `internal/plugins/llm_guard.go` |
+| The full prompt in the logs | The request is logged as a shape, not as its content | `internal/plugins/llm-integration.go` |
+| The attacker choosing a path | The samples are named after their SHA-256; the name suggested by the attacker is metadata only | `internal/evidence/store.go` |
+| A sample executed by mistake | The samples are written as opaque blobs, `0600`, under a `0700` directory, and are never served | `internal/evidence/store.go` |
+| The attacker reading the host filesystem | The decoy content is generated, never read from disk — no path from a request reaches the filesystem | `internal/plugins/maze.go` |
+
+## What the sandbox cannot do
+
+Two things stay outside the model, and both need a decision from you.
+
+**The plugins run in-process.** A plugin is arbitrary code compiled into the
+runtime: it can read the honeypot filesystem, reach the network and see every
+event. Review the plugins, pin their commits, and rebuild deliberately. The
+lockfile records what was fetched, but it does not verify it.
+
+**The model provider is outside the perimeter.** When the LLM decoy is
+enabled, the attacker content leaves the host. Use a self-hosted provider, or
+one covered by an agreement that allows it, and keep the credential scrubbing
+enabled. The `host` setting accepts any OpenAI compatible endpoint, including
+a local one.
+
+## Checklist before exposure
+
+- The honeypot runs with the hardened profile, not the default one.
+- The egress allowlist is in place, and the metadata address is rejected.
+- The honeypot address is excluded from the CMDB, the monitoring probes, the load balancers and the scanner baselines.
+- The log and the sample directory are `0600`/`0700` and owned by the runtime user.
+- The credentials that the decoy offers are synthetic. A decoy that serves a real password is a real password leak.
+- The authorisation, the monitored scope, the retention period and the incident owner are written down.
+- The sample store is enabled and its retention is defined.
+- The plugin set is reviewed and pinned.

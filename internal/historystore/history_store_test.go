@@ -8,6 +8,7 @@ import (
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/plugins"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewHistoryStore(t *testing.T) {
@@ -115,4 +116,80 @@ func TestAppend_Concurrent(t *testing.T) {
 func TestQuery_MissingKey(t *testing.T) {
 	hs := NewHistoryStore()
 	assert.Nil(t, hs.Query("nonexistent"))
+}
+
+// TestQueryReturnsACopy guards the ownership of the stored messages.
+//
+// The callers append to the slice they receive. If the store handed out its
+// own backing array, two concurrent sessions of the same source would write
+// into each other, and the context sent to the model would mix the turns of
+// two connections.
+func TestQueryReturnsACopy(t *testing.T) {
+	store := NewHistoryStore()
+	defer store.Close()
+
+	store.Append("session", plugins.Message{Role: "user", Content: "first"})
+
+	queried := store.Query("session")
+	require.Len(t, queried, 1)
+
+	queried = append(queried, plugins.Message{Role: "assistant", Content: "appended by the caller"})
+
+	stored := store.Query("session")
+	require.Len(t, stored, 1, "the caller must not be able to grow the stored history")
+	assert.Equal(t, "first", stored[0].Content)
+}
+
+// TestQueryDoesNotAliasTheStoredArray makes sure the copy does not share the
+// backing array of the stored slice.
+func TestQueryDoesNotAliasTheStoredArray(t *testing.T) {
+	store := NewHistoryStore()
+	defer store.Close()
+
+	for i := 0; i < 6; i++ {
+		store.Append("session", plugins.Message{Role: "user", Content: "m"})
+	}
+
+	queried := store.Query("session")
+	require.Len(t, queried, 6)
+
+	// Appending to the returned slice must not write into the stored array.
+	queried = append(queried, plugins.Message{Role: "assistant", Content: "NEW"})
+
+	stored := store.Query("session")
+	require.Len(t, stored, 6)
+	for _, message := range stored {
+		assert.Equal(t, "m", message.Content)
+	}
+}
+
+// TestConcurrentSessionsOfTheSameSourceDoNotInterfere exercises the path that
+// the SSH and TELNET strategies use: the key of a session is derived from the
+// source address and the user name, so two connections of the same source
+// share it.
+func TestConcurrentSessionsOfTheSameSourceDoNotInterfere(t *testing.T) {
+	store := NewHistoryStore()
+	defer store.Close()
+
+	const connections = 8
+	const turns = 20
+
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(connections)
+
+	for i := 0; i < connections; i++ {
+		go func() {
+			defer waitGroup.Done()
+			for turn := 0; turn < turns; turn++ {
+				histories := store.Query("SSH10.0.0.5root")
+				histories = append(histories, plugins.Message{Role: "user", Content: "command"})
+				store.Append("SSH10.0.0.5root", histories[len(histories)-1])
+			}
+		}()
+	}
+
+	waitGroup.Wait()
+
+	stored := store.Query("SSH10.0.0.5root")
+	assert.Len(t, stored, connections*turns)
 }

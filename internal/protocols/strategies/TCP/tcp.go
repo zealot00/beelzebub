@@ -659,7 +659,7 @@ func (s *tcpSession) serve(conn net.Conn) {
 		}
 
 		if !matched {
-			s.traceNotFound(commandInput, commandRaw)
+			s.traceNotFound(commandInput, commandRaw, rawBuffer)
 		}
 		if terminalReadError {
 			return
@@ -711,6 +711,7 @@ func (s *tcpSession) handleMatch(command parser.Command, rawBuffer []byte, comma
 	// always need latin1ToRawBytes + applyPatches.
 	outputIsUTF8 := s.servConf.WireEncoding != "latin1"
 	applyGenericPatches := command.Plugin == ""
+	var commandMetadata map[string]string
 	if command.Plugin != "" {
 		if cp, ok := plugin.GetCommand(command.Plugin); ok {
 			outputIsUTF8 = !command.BinaryOutput
@@ -718,13 +719,14 @@ func (s *tcpSession) handleMatch(command parser.Command, rawBuffer []byte, comma
 			if pluginCtx == nil {
 				pluginCtx = context.Background()
 			}
-			output, err := cp.Execute(pluginCtx, plugin.CommandRequest{
+			output, meta, err := plugins.ExecuteCommandPlugin(cp, pluginCtx, plugin.CommandRequest{
 				Command:  commandInput,
 				ClientIP: s.host,
 				Protocol: "tcp",
 				History:  plugins.MessagesToPlugin(histories),
 				Config:   plugins.ConfigFromServiceConf(s.servConf),
 			})
+			commandMetadata = meta
 			if err != nil {
 				log.Errorf("plugin %q execute error: %s", command.Plugin, err.Error())
 				// Preserve a configured binary handler fallback when the plugin
@@ -757,6 +759,9 @@ func (s *tcpSession) handleMatch(command parser.Command, rawBuffer []byte, comma
 
 	// Build the trace event (will be emitted after wire-plugins enrich it).
 	ev := tracer.Event{
+		// The original bytes are kept aside: the string fields are a lossy
+		// re-encoding, and the sample store needs the exact frame.
+		Payload:        rawBuffer,
 		Msg:            "TCP Session Interaction",
 		RemoteAddr:     s.remoteAddr,
 		SourceIp:       s.host,
@@ -818,6 +823,19 @@ func (s *tcpSession) handleMatch(command parser.Command, rawBuffer []byte, comma
 	ev.CommandOutput = wireExchange.CommandOutput
 	ev.Metadata = wireExchange.Metadata
 
+	// The findings of the command plugin are merged with the metadata the
+	// wire plugins contributed.
+	if len(commandMetadata) > 0 {
+		if ev.Metadata == nil {
+			ev.Metadata = make(map[string]string, len(commandMetadata))
+		}
+		for key, value := range commandMetadata {
+			if _, exists := ev.Metadata[key]; !exists {
+				ev.Metadata[key] = value
+			}
+		}
+	}
+
 	// Store command and response in history (after wire-plugins so any response
 	// replacement they performed is captured).
 	newEntries := []plugins.Message{
@@ -859,8 +877,13 @@ func (s *tcpSession) upgradeTLS(conn net.Conn) (net.Conn, bool) {
 }
 
 // traceNotFound emits the interaction event for input that matched no command.
-func (s *tcpSession) traceNotFound(commandInput, commandRaw string) {
+//
+// The unmatched bytes are the interesting ones: they are the probes that did
+// not look like the configured protocol, and they are kept aside for the
+// sample store.
+func (s *tcpSession) traceNotFound(commandInput, commandRaw string, rawBuffer []byte) {
 	s.tr.TraceEvent(tracer.Event{
+		Payload:        rawBuffer,
 		Msg:            "TCP Session Interaction",
 		RemoteAddr:     s.remoteAddr,
 		SourceIp:       s.host,

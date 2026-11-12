@@ -11,6 +11,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"net"
 	"net/http"
+	"time"
 )
 
 type remoteAddrCtxKey struct{}
@@ -92,13 +93,27 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 	}
 
 	go func() {
-		httpServer := server.NewStreamableHTTPServer(
+		mcpHTTP := server.NewStreamableHTTPServer(
 			mcpServer,
 			server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
 				return context.WithValue(ctx, remoteAddrCtxKey{}, r.RemoteAddr)
 			}),
 		)
-		if err := httpServer.Start(servConf.Address); err != nil {
+
+		// The server is wrapped instead of started with Start(): the wrapper
+		// carries the timeouts that bound the resources a single stalled
+		// agent connection can hold.
+		httpServer := &http.Server{
+			Addr:              servConf.Address,
+			Handler:           mcpHTTP,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    1 << 20,
+		}
+
+		if err := httpServer.ListenAndServe(); err != nil {
 			log.Errorf("Failed to start MCP server on %s: %v", servConf.Address, err)
 			return
 		}

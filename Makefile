@@ -54,6 +54,18 @@ test.dependencies.start:
 test.dependencies.down:
 	${DOCKER_COMPOSE} -f ./integration_test/docker-compose.yml down
 
+# adversarial runs the automated adversarial suite: path traversal, container
+# escape assertions and prompt jailbreak.
+.PHONY: adversarial
+adversarial:
+	go test ./internal/adversarial/... -count=1 -v
+
+# verify.sandbox runs the container escape attempts against the hardened
+# profile. It needs a container runtime.
+.PHONY: verify.sandbox
+verify.sandbox:
+	./scripts/verify-sandbox.sh
+
 # validate-specs validates all honeypot service configurations against the
 # per-protocol JSON Schemas in specs/. Exit code 1 on any failure.
 .PHONY: validate-specs

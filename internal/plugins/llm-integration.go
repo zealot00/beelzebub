@@ -76,12 +76,12 @@ type llmFindings struct {
 	refusal bool
 }
 
-// eventMetadata returns the guardrail findings as event metadata.
+// EventMetadata returns the guardrail findings as event metadata.
 //
 // The findings are the signal that an AI agent, and not a human, drove the
 // interaction: an injection attempt, a truncated payload, a redacted
 // credential or a replaced refusal.
-func (llmHoneypot *LLMHoneypot) eventMetadata() map[string]string {
+func (llmHoneypot *LLMHoneypot) EventMetadata() map[string]string {
 	metadata := map[string]string{}
 
 	if llmHoneypot.findings.injection {
@@ -197,6 +197,12 @@ func BuildHoneypot(
 	}
 }
 
+// InitLLMHoneypot injects the dependencies and returns the instance the
+// decoy runs on.
+//
+// The configuration is taken by value: the returned instance is the one that
+// holds the runtime state, including the guardrail findings. Reading them
+// from the value that was passed in would always return an empty result.
 func InitLLMHoneypot(config LLMHoneypot) *LLMHoneypot {
 	// Inject the dependencies
 	config.client = resty.New()

@@ -230,7 +230,7 @@ func TestPrepareInputRecordsTheFindings(t *testing.T) {
 	require.False(t, truncated)
 	assert.Contains(t, prepared, "ignore previous instructions")
 
-	metadata := honeypot.eventMetadata()
+	metadata := honeypot.EventMetadata()
 	assert.Equal(t, "true", metadata["llm_injection"])
 	assert.NotContains(t, metadata, "llm_truncated")
 	assert.NotContains(t, metadata, "llm_credentials_redacted")
@@ -245,7 +245,7 @@ func TestPrepareInputRecordsTheRedaction(t *testing.T) {
 
 	honeypot.prepareInput("mysql -u root -phunter2secret")
 
-	metadata := honeypot.eventMetadata()
+	metadata := honeypot.EventMetadata()
 	assert.Equal(t, "true", metadata["llm_credentials_redacted"])
 }
 
@@ -259,6 +259,6 @@ func TestPrepareInputRecordsTheTruncation(t *testing.T) {
 	_, truncated := honeypot.prepareInput(strings.Repeat("A", 100))
 	require.True(t, truncated)
 
-	metadata := honeypot.eventMetadata()
+	metadata := honeypot.EventMetadata()
 	assert.Equal(t, "true", metadata["llm_truncated"])
 }

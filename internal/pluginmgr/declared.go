@@ -200,7 +200,11 @@ func (m *Manager) lockByURL() (map[string]LockedPlugin, error) {
 
 // present reports whether the plugin's vendored source directory exists.
 func (m *Manager) present(p LockedPlugin) bool {
-	_, err := os.Stat(filepath.Join(m.moduleRoot, filepath.FromSlash(p.Dir)))
+	directory, err := containedPath(m.moduleRoot, p.Dir)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(directory)
 	return err == nil
 }
 

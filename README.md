@@ -53,6 +53,98 @@ Start with one of the **18 example configurations** in [configurations/services]
 
 Examples range from banners and selected responses to interactive exchanges. **LLM** examples require a configured provider; WordPress uses it for its catch-all route. Check your deployment's port mappings when enabling additional examples.
 
+## Capability map
+
+The runtime is organised in four layers. Each one extends without touching the others: a new decoy does not require a new event model, and a new output does not require a new decoy.
+
+```mermaid
+flowchart TB
+    subgraph CAP["Capture"]
+        direction LR
+        SSH --- HTTP --- TCP --- TELNET --- MCP
+    end
+    subgraph EVT["Event model"]
+        direction LR
+        EventID --- SessionID --- ConnID --- Sequence --- CorrelationKey --- Payload
+    end
+    subgraph OUT["Outputs"]
+        direction LR
+        LocalLog["Local log"] --- RabbitMQ --- Syslog["Syslog RFC 5424"] --- Cloud["Beelzebub Cloud"]
+    end
+    subgraph CON["Consumers"]
+        direction LR
+        Plugins["Plugins (EventSubscriber)"] --- Evidence["Evidence store"]
+    end
+    CAP --> EVT --> OUT
+    EVT --> CON
+```
+
+| Layer | What it covers | Extension point |
+| --- | --- | --- |
+| **Capture** | SSH, HTTP, TCP, TELNET and MCP decoys. Raw frames, request bodies, credentials, session lifecycle | YAML services, Go plugins |
+| **Event model** | One canonical record per interaction. `ID` keeps its historical per-protocol meaning; `EventID`, `SessionID`, `ConnID`, `Sequence`, `CorrelationKey` and `Payload` are additive | `pkg/plugin.Event` |
+| **Outputs** | Local log, RabbitMQ, syslog and the Beelzebub Cloud. They are composed, not exclusive: enabling a second one no longer replaces the first | `core.tracings` |
+| **Consumers** | Plugins that observe every event, and the evidence store that archives the payloads | `plugin.EventSubscriber`, `core.evidence` |
+
+### What the event model buys you
+
+| Question | Answered with |
+| --- | --- |
+| Which host is this? | `CorrelationKey` — protocol, service and source, stable across connections |
+| Which interaction is this? | `SessionID` — the connection for TCP, SSH and TELNET, a rolling session per source for HTTP and MCP |
+| In which order? | `Sequence` — monotonic within a session. The events are dispatched concurrently, their arrival order is not guaranteed |
+| Which single record is this? | `EventID` — unique across the runtime |
+| What were the exact bytes? | `Payload` — the raw frame, for the protocols that can provide it |
+| Was this an AI agent? | `Metadata` — `llm_injection`, `llm_refusal_replaced`, `llm_guardrail`, `llm_truncated`, `llm_credentials_redacted` |
+
+### Guardrails and isolation
+
+| Surface | Control |
+| --- | --- |
+| Prompt jailbreak | The attacker content is fenced and declared as data, the guardrail verdict is matched by containment, and a refusal is replaced by an in-character answer |
+| Credential exfiltration | The credential shapes found in the attacker content are masked before it leaves the perimeter |
+| Path traversal | The decoy content is generated, never read from disk. The samples are named after their SHA-256: the attacker never influences a path |
+| Container escape | The [hardened profile](docker-compose.hardened.yml) drops every capability, forbids the privilege escalation, mounts a read-only root filesystem and caps the resources. The egress allowlist lives on the host firewall |
+| Evidence integrity | The events carry a hash chain friendly identity, the payload is copied per consumer, and the logs are created with `0600` |
+
+## Verification
+
+```bash
+make build            # build the runtime
+make test.unit        # unit tests
+make adversarial      # path traversal, container escape and prompt jailbreak suite
+make validate-all     # service configuration schemas and validation
+go test -race ./...   # concurrency
+```
+
+| Check | Result |
+| --- | --- |
+| `make build` | OK |
+| `go vet ./...` | OK |
+| `gofmt -l .` | clean |
+| `make test.unit` | 21 packages, 983 cases, all green |
+| `go test -race ./...` | clean, no data race |
+| `make validate-all` | 0 errors, 6 warnings (all pre-existing upstream) |
+| `make adversarial` | 51 cases in 11 groups, all green |
+
+The adversarial suite covers the three attacks that matter for a decoy:
+
+| Group | Asserts |
+| --- | --- |
+| Path traversal | The decoy answers a traversal attempt with generated content, never with a file of the host. The sample store stays inside its root whatever name the attacker suggests |
+| Container escape | The hardened profile keeps its user, its capability drop, its read-only filesystem, its resource ceilings and its read-only configuration. The live escape attempts live in `scripts/verify-sandbox.sh` and need a container runtime |
+| Prompt jailbreak | The attacker content reaches the model fenced and never in an instruction position, the guardrail is not bypassed by a wording, a refusal is replaced, the credentials do not leave the perimeter, and the findings reach the event metadata |
+
+Two end-to-end runs back the capture path:
+
+```text
+# The syslog pipeline
+<157>1 2026-11-12T10:10:53Z host honeypot 94174 http [beelzebub@32473 src="127.0.0.1" proto="HTTP" session="95102c3d-..." correlation="HTTP|:8080|127.0.0.1" eventid="f254be66-..."] {"DateTime":"...","Protocol":"HTTP",...}
+
+# The evidence store: the sample is byte identical to what was posted
+samples/ac/ac7cfbc2a2402a7539d8655542e10eec932ac8a3c4396f35e2025352331055cf.bin
+```
+
 ## Get started
 
 You need **Git, a shell, and Docker Engine with Compose v2**. Use an **isolated lab host** with authorization for all configured listeners: the installer starts a bundle of example services, including privileged ports. On Linux it can enable **host networking**; Docker does not provide network isolation in that mode.
@@ -96,9 +188,11 @@ Explore the platform's deployment, investigation, and reporting capabilities, an
 
 - **[Documentation](https://docs.beelzebub.ai):** configuration, protocols, operations, integrations, and recipes.
 - **[Plugin authoring](https://docs.beelzebub.ai/plugins/authoring):** build extensions with the public Go SDK. Plugins execute in-process; review their source and pin trusted versions.
+- **[Isolation](docs/content/docs/operations/isolation.mdx):** the two sandboxes, the threat matrix and the egress rules for an exposed deployment.
+- **[Syslog pipeline](docs/content/docs/operations/syslog.mdx):** ship the runtime events to a central log server over RFC 5424.
 - **[Contributing](CONTRIBUTING.md):** contribute code, examples, or documentation under the [Code of Conduct](CODE_OF_CONDUCT.md). Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 
-For development, use the Go version declared in [go.mod](go.mod), Git, and Make. Build with `make build`; run `make test.unit`, `go vet ./...`, and `make validate-all` before submitting runtime changes. The [development workflow](https://docs.beelzebub.ai/contributing/development) covers integration tests and their Docker dependencies.
+For development, use the Go version declared in [go.mod](go.mod), Git, and Make. Build with `make build`; run `make test.unit`, `make adversarial`, `go vet ./...`, and `make validate-all` before submitting runtime changes. The [development workflow](https://docs.beelzebub.ai/contributing/development) covers integration tests and their Docker dependencies.
 
 Thank you to [JetBrains](https://jb.gg/OpenSourceSupport) for supporting development with tools through its open-source support program.
 

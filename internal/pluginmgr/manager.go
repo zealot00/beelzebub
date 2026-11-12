@@ -49,6 +49,35 @@ func NewManager(coreVersion, token string) (*Manager, error) {
 	}, nil
 }
 
+// containedPath resolves a relative path and refuses the ones that escape
+// the root directory.
+//
+// The relative path comes from the lockfile, which is a file on disk: a
+// tampered entry must not be able to point the removal or the write outside
+// of the module.
+func containedPath(root, relative string) (string, error) {
+	if relative == "" {
+		return "", fmt.Errorf("the path is empty")
+	}
+
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+
+	candidate := filepath.Join(rootAbs, filepath.FromSlash(relative))
+	candidateAbs, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", err
+	}
+
+	if candidateAbs != rootAbs && !strings.HasPrefix(candidateAbs, rootAbs+string(os.PathSeparator)) {
+		return "", fmt.Errorf("the path %q escapes the root directory", relative)
+	}
+
+	return candidateAbs, nil
+}
+
 func (m *Manager) pluginsDir() string { return filepath.Join(m.moduleRoot, PluginsDirName) }
 func (m *Manager) lockPath() string {
 	return filepath.Join(m.moduleRoot, ConfigurationsDirName, LockFileName)
@@ -196,7 +225,13 @@ func (m *Manager) Remove(ctx context.Context, name string) (LockedPlugin, error)
 		"-dropreplace="+locked.Module, "-droprequire="+locked.Module); err != nil {
 		return LockedPlugin{}, fmt.Errorf("editing go.mod: %w", err)
 	}
-	if err := os.RemoveAll(filepath.Join(m.moduleRoot, filepath.FromSlash(locked.Dir))); err != nil {
+	// The lockfile is a file on disk: a tampered or hand edited entry must
+	// not turn the removal into an arbitrary directory deletion.
+	pluginDir, err := containedPath(m.moduleRoot, locked.Dir)
+	if err != nil {
+		return LockedPlugin{}, err
+	}
+	if err := os.RemoveAll(pluginDir); err != nil {
 		return LockedPlugin{}, fmt.Errorf("deleting plugin dir: %w", err)
 	}
 	if err := m.regenerate(ctx, lf); err != nil {

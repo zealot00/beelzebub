@@ -64,12 +64,19 @@ func (l *llmPlugin) ExecuteWithMetadata(ctx context.Context, req plugin.CommandR
 		RedactCredentials:       !req.Config.CredentialRedactionDisabled,
 	}
 
-	response, err := InitLLMHoneypot(*hp).ExecuteModel(req.Command, req.ClientIP)
+	// The instance returned by InitLLMHoneypot is the one that holds the
+	// findings: InitLLMHoneypot takes the configuration by value, so the
+	// state recorded during the call belongs to the returned instance.
+	instance := InitLLMHoneypot(*hp)
+
+	response, err := instance.ExecuteModel(req.Command, req.ClientIP)
+	metadata := instance.EventMetadata()
+
 	if err != nil {
-		return "", hp.eventMetadata(), err
+		return "", metadata, err
 	}
 
-	return response, hp.eventMetadata(), nil
+	return response, metadata, nil
 }
 
 func init() {

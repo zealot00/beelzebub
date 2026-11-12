@@ -66,6 +66,12 @@ adversarial:
 verify.sandbox:
 	./scripts/verify-sandbox.sh
 
+# check.docs verifies that the two READMEs carry the same numbers, and that
+# those numbers match the test suite.
+.PHONY: check.docs
+check.docs:
+	./scripts/check-readme-sync.sh
+
 # validate-specs validates all honeypot service configurations against the
 # per-protocol JSON Schemas in specs/. Exit code 1 on any failure.
 .PHONY: validate-specs

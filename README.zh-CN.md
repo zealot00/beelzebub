@@ -66,6 +66,7 @@ flowchart TB
 | 容器逃逸 | [加固 profile](docker-compose.hardened.yml):丢弃全部 capability、禁止提权、只读根文件系统、资源上限。出网白名单由**宿主机防火墙**执行 |
 | 证据完整性 | 事件带可校验的身份字段;载荷逐消费者拷贝;日志权限 `0600` |
 | 证据留存 | 样本按 digest 去重、原子落盘、权限 `0600`,目录 `0700` |
+| 诱饵凭据 | 蜜罐提供 `svc_backup` 服务账号,密码 `Bkp!2023#svc`。**账号名是普通名字**,不暴露自己是诱饵;**密码才是识别标志** —— 它出现在任何地方都说明来源是这台蜜罐。SSH/TELNET 示例默认接受它,使用行为会被记录为**登录成功** |
 
 ### 双沙盒
 
@@ -162,6 +163,7 @@ make build            # 构建运行时
 make test.unit        # 单元测试
 make adversarial      # 目录穿越 / 容器逃逸 / 提示词越狱 对抗套件
 make validate-all     # 服务配置 schema 与校验
+make check.docs       # 校验两份 README 的数字一致且与实际相符
 go test -race ./...   # 并发
 ```
 
@@ -170,10 +172,11 @@ go test -race ./...   # 并发
 | `make build` | OK |
 | `go vet ./...` | OK |
 | `gofmt -l .` | clean |
-| `make test.unit` | 21 个包,1019 个用例,全绿 |
-| `make adversarial` | 87 个用例 / 19 组,全绿 |
+| `make test.unit` | 21 个包,1029 个用例,全绿 |
+| `make adversarial` | 91 个用例 / 23 组,全绿 |
 | `go test -race ./...` | 干净,无 data race |
 | `make validate-all` | 0 errors,6 warnings(全部为上游既有) |
+| `make check.docs` | 两份 README 数字一致,且与实际测试结果一致 |
 
 对抗套件覆盖蜜罐最该防的三类攻击:
 

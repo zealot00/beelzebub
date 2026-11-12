@@ -107,6 +107,7 @@ flowchart TB
 | Fingerprinting | The paths an administrator reads first — `/etc/passwd`, `/etc/shadow`, `/root/.bash_history` — are answered with a plausible **synthetic** file, not a directory listing. The real file of the host is never disclosed |
 | Container escape | The [hardened profile](docker-compose.hardened.yml) drops every capability, forbids the privilege escalation, mounts a read-only root filesystem and caps the resources. The egress allowlist lives on the host firewall |
 | Evidence integrity | The events carry a hash chain friendly identity, the payload is copied per consumer, and the logs are created with `0600` |
+| Bait credential | The decoy offers the `svc_backup` service account, with the password `Bkp!2023#svc`. The name is an ordinary one, so the decoy does not give itself away; the password identifies the leak wherever it shows up, and the SSH and TELNET examples accept it so that the use is logged |
 
 ## Verification
 
@@ -115,6 +116,7 @@ make build            # build the runtime
 make test.unit        # unit tests
 make adversarial      # path traversal, container escape and prompt jailbreak suite
 make validate-all     # service configuration schemas and validation
+make check.docs       # the two READMEs carry the same numbers
 go test -race ./...   # concurrency
 ```
 
@@ -123,10 +125,11 @@ go test -race ./...   # concurrency
 | `make build` | OK |
 | `go vet ./...` | OK |
 | `gofmt -l .` | clean |
-| `make test.unit` | 21 packages, 1019 cases, all green |
+| `make test.unit` | 21 packages, 1029 cases, all green |
 | `go test -race ./...` | clean, no data race |
 | `make validate-all` | 0 errors, 6 warnings (all pre-existing upstream) |
-| `make adversarial` | 87 cases in 19 groups, all green |
+| `make check.docs` | the two READMEs carry the same numbers, and they match the suite |
+| `make adversarial` | 91 cases in 23 groups, all green |
 
 The adversarial suite covers the three attacks that matter for a decoy:
 

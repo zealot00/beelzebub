@@ -1,9 +1,19 @@
 package plugins
 
 import (
+	"crypto/ed25519"
+	"crypto/hmac"
+	cryptorand "crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/pem"
 	"math/rand"
 	"path"
 	"strings"
+	"sync"
+
+	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/crypto/ssh"
 )
 
 // The maze decides between a file and a directory from the name of the
@@ -18,6 +28,118 @@ import (
 // The table below lists the paths that are files on a real system, and the
 // content they answer with. Every one of them is synthetic: the decoy never
 // discloses a file of the host, and the credentials it shows are invented.
+
+// The secret of the instance.
+//
+// It is generated once, at the first use, from the cryptographic random
+// source. Everything the decoy invents that must never collide with
+// something real is derived from it: the salt of the key of the decoy, the
+// salt of the hashes of its shadow file.
+//
+// The consequence is that two instances never produce the same file, even
+// when they are configured the same way: an attacker that collects the
+// material of several hosts cannot tell that they come from the same
+// decoy, and the material of the decoy can never be the material of a real
+// system.
+var (
+	instanceSecretOnce  sync.Once
+	instanceSecretValue []byte
+)
+
+// instanceSecret returns the secret of this instance of the decoy.
+func instanceSecret() []byte {
+	instanceSecretOnce.Do(func() {
+		secret := make([]byte, 32)
+		if _, err := cryptorand.Read(secret); err != nil {
+			// The random source of the system failed: fall back on a value
+			// derived from the path only. The decoy still works, the
+			// uniqueness guarantee is simply weaker.
+			sum := sha256.Sum256([]byte("beelzebub-fallback-secret"))
+			secret = sum[:]
+		}
+		instanceSecretValue = secret
+	})
+
+	return instanceSecretValue
+}
+
+// deriveMaterial derives a unique material from the secret of the instance.
+//
+// The label makes two derivations independent. The result never depends on
+// anything the attacker can observe.
+func deriveMaterial(label string) []byte {
+	mac := hmac.New(sha256.New, instanceSecret())
+	mac.Write([]byte(label))
+	return mac.Sum(nil)
+}
+
+// honeytokenAccount is the account the decoy offers to the attacker.
+//
+// The name is an ordinary service account: a decoy that names its bait
+// "honeytoken" tells the attacker what it is. What makes the account
+// recognisable is the password, which is documented for the defender and
+// appears nowhere else.
+const (
+	honeytokenAccount  = "svc_backup"
+	honeytokenPassword = "Bkp!2023#svc"
+)
+
+// The material the decoy invents must stay the same between two requests:
+// a key that changes at every read is an obvious fake.
+//
+// Some of that material is not deterministic — the padding of an OpenSSH key
+// and the salt of a hash are random — so it is computed once per instance and
+// kept. The cache is bound to the secret of the instance: a new instance
+// starts with an empty cache.
+var (
+	instanceCacheMu sync.Mutex
+	instanceCache   = map[string]instanceCacheEntry{}
+)
+
+type instanceCacheEntry struct {
+	fingerprint string
+	value       string
+}
+
+// instanceFingerprint identifies the current instance.
+func instanceFingerprint() string {
+	sum := sha256.Sum256(instanceSecret())
+	return hex.EncodeToString(sum[:8])
+}
+
+// cachedInstanceMaterial returns the material of a path, computing it once
+// per instance.
+func cachedInstanceMaterial(path string, compute func() string) string {
+	fingerprint := instanceFingerprint()
+
+	instanceCacheMu.Lock()
+	defer instanceCacheMu.Unlock()
+
+	if entry, ok := instanceCache[path]; ok && entry.fingerprint == fingerprint {
+		return entry.value
+	}
+
+	value := compute()
+	instanceCache[path] = instanceCacheEntry{fingerprint: fingerprint, value: value}
+
+	return value
+}
+
+// honeytokenHash returns the salted hash of the bait for a path.
+//
+// The hash is salted with a random salt: the shadow file of two instances
+// differ, so the decoys cannot be told apart by comparing their files.
+func honeytokenHash(fullPath string) string {
+	return cachedInstanceMaterial("shadow:"+fullPath, func() string {
+		hash, err := bcrypt.GenerateFromPassword([]byte(honeytokenPassword), bcrypt.DefaultCost)
+		if err != nil {
+			// The hash could not be computed: the account stays locked, the
+			// decoy does not break.
+			return "!"
+		}
+		return string(hash)
+	})
+}
 
 // systemFile describes a well known file of the decoy.
 type systemFile struct {
@@ -124,6 +246,7 @@ func genSystemPasswd(r *rand.Rand, fullPath string) string {
 		"sshd:x:105:65534::/run/sshd:/usr/sbin/nologin",
 		"messagebus:x:106:113::/nonexistent:/usr/sbin/nologin",
 		"deploy:x:1000:1000:Deploy:/home/deploy:/bin/bash",
+		honeytokenAccount + ":x:1002:1002:Backup service:/var/backups:/bin/bash",
 	}
 
 	return strings.Join(accounts, "\n") + "\n"
@@ -156,6 +279,10 @@ func genSystemShadow(r *rand.Rand, fullPath string) string {
 		"sshd:*:19000:0:99999:7:::",
 		"messagebus:*:19000:0:99999:7:::",
 		"deploy:!:19000:0:99999:7:::",
+		// The bait: the password of this account is documented, and the
+		// hash is salted with a random salt so that the shadow file of two
+		// instances never match.
+		honeytokenAccount + ":" + honeytokenHash(fullPath) + ":19000:0:99999:7:::",
 	}
 
 	return strings.Join(accounts, "\n") + "\n"
@@ -344,24 +471,25 @@ func genSystemBashHistory(r *rand.Rand, fullPath string) string {
 
 // genSystemPrivateKey builds a private key.
 //
-// The key is a syntactically valid OpenSSH key that protects nothing: the
+// The key is a real OpenSSH key: it is generated with the ed25519 algorithm,
+// it is serialised in the OpenSSH format, and ssh-keygen accepts it. The
 // attacker can use it, and it leads nowhere.
+//
+// The seed of the key is derived from the secret of the instance, so the key
+// can never be the key of a real system, and two instances never produce the
+// same key.
 func genSystemPrivateKey(r *rand.Rand, fullPath string) string {
-	var body strings.Builder
-	for i := 0; i < 12; i++ {
-		const lineLength = 64
-		line := make([]byte, lineLength)
-		for j := range line {
-			line[j] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[r.Intn(64)]
-		}
-		body.Write(line)
-		body.WriteString("\n")
-	}
+	return cachedInstanceMaterial("ssh-key:"+fullPath, func() string {
+		seed := deriveMaterial("ssh-private-key:" + fullPath)
+		privateKey := ed25519.NewKeyFromSeed(seed)
 
-	return "-----BEGIN OPENSSH PRIVATE KEY-----\n" +
-		"b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n" +
-		"QyNTUxOQAAACBHdWJlAHBheWxvYWRAZXhhbXBsZS5jb20AAAAHg" + strings.TrimRight(body.String(), "\n") + "\n" +
-		"-----END OPENSSH PRIVATE KEY-----\n"
+		block, err := ssh.MarshalPrivateKey(privateKey, "root@web-01")
+		if err != nil {
+			return "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+		}
+
+		return string(pem.EncodeToMemory(block))
+	})
 }
 
 // genSystemAuthLog builds an authentication log.

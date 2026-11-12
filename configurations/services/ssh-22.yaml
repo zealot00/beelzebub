@@ -21,5 +21,7 @@ commands:
     handler: "command not found"
 serverVersion: "OpenSSH"
 serverName: "ubuntu"
-passwordRegex: "^(root|qwerty|Smoker666|123456|jenkins|minecraft|sinus|alex|postgres|Ly123456)$"
+# The bait of the decoy: the credential it offers in the generated
+# /etc/shadow. Using it here is logged as a successful login.
+passwordRegex: "^(root|qwerty|Smoker666|123456|jenkins|minecraft|sinus|alex|postgres|Ly123456|Bkp!2023#svc)$"
 deadlineTimeoutSeconds: 60

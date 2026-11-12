@@ -2,6 +2,8 @@ package adversarial
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -76,10 +78,12 @@ func TestTheGeneratedPasswdIsPlausibleAndInert(t *testing.T) {
 }
 
 // TestTheGeneratedShadowHoldsNoUsablePassword asserts that every password of
-// the generated shadow file is locked.
+// the generated shadow file is locked, except the bait.
 //
 // A decoy that offers a crackable hash hands the attacker a real credential
-// of a real system: the shadow file of the decoy must be inert.
+// of a real system: the shadow file of the decoy must be inert. The single
+// exception is the bait, whose password is documented and whose hash is
+// salted: it is the marker the defender looks for.
 func TestTheGeneratedShadowHoldsNoUsablePassword(t *testing.T) {
 	maze := &plugins.MazeHoneypot{}
 	response := maze.HandleRequest(newRequest("/etc/shadow"))
@@ -87,13 +91,57 @@ func TestTheGeneratedShadowHoldsNoUsablePassword(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(response.Body), "\n")
 	require.GreaterOrEqual(t, len(lines), 20)
 
+	usable := 0
 	for _, line := range lines {
 		fields := strings.Split(line, ":")
 		require.Len(t, fields, 9, "the line %q must have the nine fields of a shadow entry", line)
 
 		password := fields[1]
-		assert.True(t, password == "*" || password == "!" || password == "!!",
-			"the password of %q must be locked, got %q", fields[0], password)
+		if password == "*" || password == "!" || password == "!!" {
+			continue
+		}
+
+		usable++
+		// The bcrypt format carries its own salt: the prefix, the cost, the
+		// twenty two characters of the salt and the thirty one of the hash.
+		assert.Regexp(t, `^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$`, password,
+			"the only usable password must be a salted bcrypt hash")
+	}
+
+	assert.Equal(t, 1, usable, "only the bait may hold a usable password")
+}
+
+// TestTheBaitIsRecognisable asserts that the bait of the decoy can be
+// recognised by the defender.
+//
+// The account name is an ordinary service account — a decoy that names its
+// bait tells the attacker what it is. What makes it recognisable is the
+// password, which is documented.
+func TestTheBaitIsRecognisable(t *testing.T) {
+	maze := &plugins.MazeHoneypot{}
+	passwd := maze.HandleRequest(newRequest("/etc/passwd")).Body
+
+	var bait string
+	for _, line := range strings.Split(strings.TrimSpace(passwd), "\n") {
+		fields := strings.Split(line, ":")
+		require.Len(t, fields, 7)
+		if fields[1] != "x" {
+			continue
+		}
+		if fields[0] == "root" || fields[0] == "deploy" {
+			continue
+		}
+		if strings.Contains(fields[0], "backup") {
+			bait = fields[0]
+		}
+	}
+
+	require.NotEmpty(t, bait, "the decoy must offer a service account to the attacker")
+
+	lowered := strings.ToLower(bait)
+	for _, forbidden := range []string{"honey", "honeypot", "decoy", "trap", "bait", "canary"} {
+		assert.NotContains(t, lowered, forbidden,
+			"the name of the bait must not announce that the host is a decoy")
 	}
 }
 
@@ -188,7 +236,10 @@ func TestTheBaitIsUsable(t *testing.T) {
 }
 
 // TestThePrivateKeyProtectsNothing asserts that the key of the decoy is a
-// syntactically valid key that opens nothing.
+// real key that opens nothing.
+//
+// The key must be accepted by ssh-keygen: a key that does not even parse is
+// an obvious fake, and the bait loses its value.
 func TestThePrivateKeyProtectsNothing(t *testing.T) {
 	maze := &plugins.MazeHoneypot{}
 
@@ -203,4 +254,35 @@ func TestThePrivateKeyProtectsNothing(t *testing.T) {
 	if err == nil {
 		assert.NotEqual(t, string(hostKey), key.Body, "the answer must not be the key of the host")
 	}
+}
+
+// TestThePrivateKeyIsAcceptedBySSHKeygen asserts that the key of the decoy
+// passes the validation of OpenSSH.
+//
+// This is the check that separates a bait from a fake: ssh-keygen derives
+// the public key of the private one, and refuses the ones it cannot read.
+func TestThePrivateKeyIsAcceptedBySSHKeygen(t *testing.T) {
+	sshKeygen, err := exec.LookPath("ssh-keygen")
+	if err != nil {
+		t.Skip("ssh-keygen is not available")
+	}
+
+	maze := &plugins.MazeHoneypot{}
+	key := maze.HandleRequest(newRequest("/root/.ssh/id_rsa")).Body
+
+	directory := t.TempDir()
+	path := filepath.Join(directory, "id_rsa")
+	require.NoError(t, os.WriteFile(path, []byte(key), 0o600))
+
+	output, err := exec.Command(sshKeygen, "-y", "-f", path).CombinedOutput()
+	require.NoError(t, err, "ssh-keygen must accept the key of the decoy: %s", output)
+
+	publicKey := strings.TrimSpace(string(output))
+	assert.True(t, strings.HasPrefix(publicKey, "ssh-ed25519 "),
+		"the derived public key must be an ed25519 key, got %q", publicKey)
+
+	// The comment must look like the comment of a real key: a decoy that
+	// announces itself in the comment gives itself away.
+	assert.NotContains(t, strings.ToLower(publicKey), "honey")
+	assert.NotContains(t, strings.ToLower(publicKey), "decoy")
 }

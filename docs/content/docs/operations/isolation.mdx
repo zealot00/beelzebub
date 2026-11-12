@@ -85,6 +85,41 @@ carry a credential out of the perimeter, and it must never end up in a path.
 | A sample executed by mistake | The samples are written as opaque blobs, `0600`, under a `0700` directory, and are never served | `internal/evidence/store.go` |
 | The attacker reading the host filesystem | The decoy content is generated, never read from disk — no path from a request reaches the filesystem | `internal/plugins/maze.go` |
 
+## The bait credential
+
+The decoy offers a service account to the attacker. The name is an ordinary
+one: a decoy that names its bait gives itself away. What makes the credential
+recognisable is its password.
+
+| | |
+| --- | --- |
+| Account | `svc_backup` |
+| Password | `Bkp!2023#svc` |
+
+The hash of the account lives in the generated `/etc/shadow`, salted with a
+random salt: two instances never produce the same file, so the decoys cannot
+be correlated by comparing them.
+
+The defender recognises the credential in two ways:
+
+- An authentication attempt with it against the decoy is logged as a
+  **successful** login. It never happens by accident, and the session that
+  follows is the most valuable interaction of the decoy.
+- The credential showing up **anywhere else** — a credential dump, a lateral
+  movement, a report of a compromised host — identifies the source of the
+  leak: it exists in no real system.
+
+The SSH and TELNET examples accept it, so that the use of the credential is
+recorded:
+
+```yaml
+passwordRegex: "^(root|qwerty|123456|Bkp!2023#svc)$"
+```
+
+Add the password to the list of the services that must record it. The
+passwords of the examples are the well known weak credentials an attacker
+tries first.
+
 ## What the sandbox cannot do
 
 Two things stay outside the model, and both need a decision from you.

@@ -37,5 +37,7 @@ commands:
     handler: "bash: $1: command not found"
 serverVersion: "Linux telnetd"
 serverName: "telnet-server"
-passwordRegex: "^(root|admin|password|123456|telnet|guest|cisco|oracle)$"
+# The bait of the decoy: the credential it offers in the generated
+# /etc/shadow. Using it here is logged as a successful login.
+passwordRegex: "^(root|admin|password|123456|telnet|guest|cisco|oracle|Bkp!2023#svc)$"
 deadlineTimeoutSeconds: 60

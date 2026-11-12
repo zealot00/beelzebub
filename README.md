@@ -6,7 +6,7 @@
 
 Deploy realistic decoys. Observe attacker behavior. Turn interactions into security evidence.
 
-**[Explore Beelzebub Platform](https://beelzebub.ai/products/beelzebub-cloud/)** · [Documentation](https://docs.beelzebub.ai) · [Quick start](#get-started)
+**[Explore Beelzebub Platform](https://beelzebub.ai/products/beelzebub-cloud/)** · [Documentation](https://docs.beelzebub.ai) · [Quick start](#get-started) · [中文版](README.zh-CN.md)
 
 [![CI](https://github.com/beelzebub-labs/beelzebub/actions/workflows/main.yml/badge.svg)](https://github.com/beelzebub-labs/beelzebub/actions/workflows/main.yml)
 [![Coverage](https://codecov.io/gh/beelzebub-labs/beelzebub/graph/badge.svg?token=8XTK7D4WHE)](https://codecov.io/gh/beelzebub-labs/beelzebub)
@@ -104,6 +104,7 @@ flowchart TB
 | Prompt jailbreak | The attacker content is fenced and declared as data, the guardrail verdict is matched by containment, and a refusal is replaced by an in-character answer |
 | Credential exfiltration | The credential shapes found in the attacker content are masked before it leaves the perimeter |
 | Path traversal | The decoy content is generated, never read from disk. The samples are named after their SHA-256: the attacker never influences a path |
+| Fingerprinting | The paths an administrator reads first — `/etc/passwd`, `/etc/shadow`, `/root/.bash_history` — are answered with a plausible **synthetic** file, not a directory listing. The real file of the host is never disclosed |
 | Container escape | The [hardened profile](docker-compose.hardened.yml) drops every capability, forbids the privilege escalation, mounts a read-only root filesystem and caps the resources. The egress allowlist lives on the host firewall |
 | Evidence integrity | The events carry a hash chain friendly identity, the payload is copied per consumer, and the logs are created with `0600` |
 
@@ -122,10 +123,10 @@ go test -race ./...   # concurrency
 | `make build` | OK |
 | `go vet ./...` | OK |
 | `gofmt -l .` | clean |
-| `make test.unit` | 21 packages, 983 cases, all green |
+| `make test.unit` | 21 packages, 1019 cases, all green |
 | `go test -race ./...` | clean, no data race |
 | `make validate-all` | 0 errors, 6 warnings (all pre-existing upstream) |
-| `make adversarial` | 51 cases in 11 groups, all green |
+| `make adversarial` | 87 cases in 19 groups, all green |
 
 The adversarial suite covers the three attacks that matter for a decoy:
 
@@ -134,6 +135,7 @@ The adversarial suite covers the three attacks that matter for a decoy:
 | Path traversal | The decoy answers a traversal attempt with generated content, never with a file of the host. The sample store stays inside its root whatever name the attacker suggests |
 | Container escape | The hardened profile keeps its user, its capability drop, its read-only filesystem, its resource ceilings and its read-only configuration. The live escape attempts live in `scripts/verify-sandbox.sh` and need a container runtime |
 | Prompt jailbreak | The attacker content reaches the model fenced and never in an instruction position, the guardrail is not bypassed by a wording, a refusal is replaced, the credentials do not leave the perimeter, and the findings reach the event metadata |
+| System files | The thirteen paths an administrator reads first are answered with a file and not with a listing, the passwd entries are well formed, the shadow passwords are all locked, the answer is never the file of the host, and the same path always answers the same content |
 
 Two end-to-end runs back the capture path:
 
@@ -186,6 +188,7 @@ Explore the platform's deployment, investigation, and reporting capabilities, an
 
 ## Resources and community
 
+- **[中文文档](README.zh-CN.md):** the capability map, the verification results and the deployment guidance, in Chinese.
 - **[Documentation](https://docs.beelzebub.ai):** configuration, protocols, operations, integrations, and recipes.
 - **[Plugin authoring](https://docs.beelzebub.ai/plugins/authoring):** build extensions with the public Go SDK. Plugins execute in-process; review their source and pin trusted versions.
 - **[Isolation](docs/content/docs/operations/isolation.mdx):** the two sandboxes, the threat matrix and the egress rules for an exposed deployment.

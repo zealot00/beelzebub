@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -190,12 +191,38 @@ func (m *MazeHoneypot) HandleRequest(request *http.Request) MazeResponse {
 		reqPath = "/"
 	}
 
+	// The well known files of a real system are answered first: their name
+	// carries no extension, so the heuristic below would turn them into
+	// directories.
+	if file, ok := isSystemFile(reqPath); ok {
+		return m.generateSystemFileResponse(reqPath, file)
+	}
+
 	// Determine if this looks like a file request (has an extension or is a known dotfile)
 	base := path.Base(reqPath)
 	if isFilePath(base) {
 		return m.generateFileResponse(reqPath)
 	}
 	return m.generateDirectoryListing(reqPath)
+}
+
+// generateSystemFileResponse answers a request for a well known file of the
+// decoy.
+//
+// The content is generated, never read from the host: the decoy answers with
+// a plausible file that holds nothing real.
+func (m *MazeHoneypot) generateSystemFileResponse(reqPath string, file systemFile) MazeResponse {
+	r := rand.New(rand.NewSource(seedFromPath(reqPath)))
+	content := file.generator(r, reqPath)
+
+	return MazeResponse{
+		StatusCode:  200,
+		ContentType: file.contentType,
+		Headers: map[string]string{
+			"Content-Length": strconv.Itoa(len(content)),
+		},
+		Body: content,
+	}
 }
 
 // knownNoExtFiles are files with no extension that should be served as files, not directories.
@@ -262,6 +289,17 @@ func (m *MazeHoneypot) generateDirectoryListing(reqPath string) MazeResponse {
 		size string
 	}
 	files := make([]fileEntry, 0, numFiles)
+
+	// The well known files of the directory come first: a listing of /etc
+	// that does not show passwd does not look like a real host.
+	for _, name := range systemFileNames(reqPath) {
+		size, known := systemFileSize(r, reqPath, name)
+		if !known {
+			size = formatSize(1 + r.Intn(4096))
+		}
+		files = append(files, fileEntry{name: name, size: size})
+	}
+
 	for i := 0; i < numFiles && i < len(profileFiles); i++ {
 		tmpl := profileFiles[i]
 		fname := tmpl.name + tmpl.ext

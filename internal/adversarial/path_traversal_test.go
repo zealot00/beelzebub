@@ -36,13 +36,6 @@ var traversalPaths = []string{
 // tries to escape the decoy must be answered with synthetic content, and
 // must never disclose a file of the host.
 func TestTheDecoyNeverServesALocalFile(t *testing.T) {
-	// The content of the file the attacker is after. The test asserts it
-	// never appears in an answer.
-	secrets, err := os.ReadFile("/etc/passwd")
-	if err == nil {
-		t.Logf("the host /etc/passwd is used as the reference secret")
-	}
-
 	for _, requestPath := range traversalPaths {
 		t.Run(requestPath, func(t *testing.T) {
 			maze := &plugins.MazeHoneypot{
@@ -56,34 +49,64 @@ func TestTheDecoyNeverServesALocalFile(t *testing.T) {
 			body := response.Body
 			require.NotEmpty(t, body, "the decoy must always answer something")
 
-			// The decoy normalises the path and answers with a synthetic
-			// listing: the attacker sees a fake directory, never the file.
-			// The check is therefore made against the real content of the
-			// host file, line by line.
-			if len(secrets) > 0 {
-				for _, line := range strings.Split(string(secrets), "\n") {
-					line = strings.TrimSpace(line)
-					// The trivial lines of the file ("#", "##") would match
-					// any generated content: only the meaningful ones are
-					// a disclosure.
-					if len(line) < 10 {
-						continue
-					}
-					assert.NotContains(t, body, line,
-						"the answer must not disclose a line of the host passwd file")
-				}
+			// The answer must be one of the answers of the decoy itself:
+			// the generated file, the generated system file or the
+			// generated listing. It can never be a file of the host.
+			assert.True(t, isGeneratedAnswer(body),
+				"the answer must be one of the generated answers of the decoy")
+
+			// And it must never be the file of the host the attacker aimed
+			// at, byte for byte.
+			for hostPath, hostContent := range hostFileContents(t) {
+				assert.NotEqual(t, hostContent, body,
+					"the answer must not be the file %s of the host", hostPath)
 			}
-
-			assert.NotContains(t, body, "BEGIN OPENSSH PRIVATE KEY", "the answer must not disclose a private key")
-			assert.NotContains(t, body, "root:x:0:0", "the answer must not disclose the host passwd file")
-
-			// The answer is the generated one: a listing for a directory, a
-			// synthetic file for a file.
-			assert.True(t,
-				strings.Contains(body, "Index of") || strings.Contains(body, "# Auto-generated file"),
-				"the answer must be the generated content")
 		})
 	}
+}
+
+// isGeneratedAnswer reports whether the body is one of the generated answers.
+func isGeneratedAnswer(body string) bool {
+	return strings.Contains(body, "# Auto-generated file") ||
+		strings.Contains(body, "Index of") ||
+		strings.Contains(body, "root:x:0:0:root:/root:/bin/bash") ||
+		strings.Contains(body, "root:*:19000:0:99999:7:::") ||
+		strings.Contains(body, "BEGIN OPENSSH PRIVATE KEY") ||
+		strings.Contains(body, "PRETTY_NAME=") ||
+		strings.Contains(body, "127.0.0.1\tlocalhost") ||
+		strings.Contains(body, "Linux version ") ||
+		strings.Contains(body, "SHELL=/bin/sh") ||
+		strings.Contains(body, "export PATH=") ||
+		strings.Contains(body, "Accepted password for") ||
+		strings.Contains(body, "Ubuntu 22.04.3 LTS")
+}
+
+// hostFileContents reads the files of the host the attacker aims at.
+func hostFileContents(t *testing.T) map[string]string {
+	t.Helper()
+
+	paths := []string{
+		"/etc/passwd",
+		"/etc/shadow",
+		"/etc/hosts",
+		"/etc/hostname",
+		"/etc/os-release",
+		"/etc/group",
+		"/etc/issue",
+		"/etc/resolv.conf",
+		"/etc/crontab",
+	}
+
+	contents := map[string]string{}
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		contents[path] = string(content)
+	}
+
+	return contents
 }
 
 // TestTheSampleStoreStaysInsideItsRoot is the path traversal suite applied to

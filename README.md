@@ -107,7 +107,7 @@ flowchart TB
 | Fingerprinting | The paths an administrator reads first — `/etc/passwd`, `/etc/shadow`, `/root/.bash_history` — are answered with a plausible **synthetic** file, not a directory listing. The real file of the host is never disclosed |
 | Container escape | The [hardened profile](docker-compose.hardened.yml) drops every capability, forbids the privilege escalation, mounts a read-only root filesystem and caps the resources. The egress allowlist lives on the host firewall |
 | Evidence integrity | The events carry a hash chain friendly identity, the payload is copied per consumer, and the logs are created with `0600` |
-| Bait credential | The decoy offers the `svc_backup` service account, with the password `Bkp!2023#svc`. The name is an ordinary one, so the decoy does not give itself away; the password identifies the leak wherever it shows up, and the SSH and TELNET examples accept it so that the use is logged |
+| Bait credential | The decoy offers the `svc_backup` service account, with the password `Bkp!2023#svc`. The name is an ordinary one, so the decoy does not give itself away; the password identifies the leak wherever it shows up, and the SSH and TELNET examples accept it so that the use is logged. The password is the same on every instance and the salt is not: reusing a password across the hosts of a network is the normal case, so the attacker concludes that the credentials are weak, not that the targets are decoys |
 
 ## Verification
 

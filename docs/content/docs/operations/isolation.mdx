@@ -100,6 +100,13 @@ The hash of the account lives in the generated `/etc/shadow`, salted with a
 random salt: two instances never produce the same file, so the decoys cannot
 be correlated by comparing them.
 
+The password is the same on every instance, and that is deliberate. Inside a
+network, the same password on many hosts is the normal case: an attacker who
+reads it on several targets concludes that the credentials are weak, not that
+the targets are decoys. It also makes the bait realistic — a real service
+account of a real estate reuses its password across the machines it manages.
+The salt keeps the files apart; the password keeps the decoy plausible.
+
 The defender recognises the credential in two ways:
 
 - An authentication attempt with it against the decoy is logged as a

@@ -81,6 +81,11 @@ func (mcpStrategy *MCPStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				Description:   servConf.Description,
 				Command:       fmt.Sprintf("%s|%s", request.Params.Name, request.Params.Arguments),
 				CommandOutput: toolConfig.Handler,
+				// MCP calls arrive over stateless HTTP requests: the source
+				// carries the session so that a sequence of tool calls from
+				// the same agent can be told apart from unrelated traffic.
+				SessionID:      tracer.SourceSession(tracer.MCP.String(), host),
+				CorrelationKey: tracer.SourceKey(tracer.MCP.String(), servConf.Address, host),
 			})
 			return mcp.NewToolResultText(toolConfig.Handler), nil
 		})

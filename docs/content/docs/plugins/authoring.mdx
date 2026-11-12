@@ -69,6 +69,58 @@ Shutdown hooks receive a bounded context and must return promptly. Copy any byte
 
 Read the [binary TCP framework](/protocols/binary-tcp) for framing, patches, response order, and event behavior.
 
+## Observe Every Event
+
+A plugin that implements `EventSubscriber` receives every event the runtime
+emits, whatever protocol produced it. This is the extension point for threat
+intelligence enrichment, attacker tool fingerprinting, and evidence
+processing.
+
+```go
+type MyObserver struct{}
+
+func (MyObserver) Metadata() plugin.Metadata {
+    return plugin.Metadata{Name: "my-observer", Version: "1.0.0", Author: "you"}
+}
+
+func (MyObserver) OnEvent(event plugin.Event) {
+    if event.SourceIp == "" {
+        return
+    }
+    // Enrich, index or archive the event.
+}
+
+func init() { plugin.Register(&MyObserver{}) }
+```
+
+A registered plugin that implements `EventSubscriber` is attached to the event
+bus when the runtime starts. A function handler can be registered directly:
+
+```go
+func init() {
+    plugin.RegisterEventHandler(func(event plugin.Event) {
+        // ...
+    })
+}
+```
+
+Handlers run on the runtime event workers, concurrently for different
+events. They must not block and must synchronize their own shared state.
+
+`plugin.Event` is the canonical record. The identity fields are additive and
+are omitted when empty:
+
+| Field | Meaning |
+| --- | --- |
+| `EventID` | Unique identifier of this single event |
+| `SessionID` | Groups the events of one interaction — the connection for TCP, SSH and TELNET, a rolling session per source for HTTP and MCP |
+| `ConnID` | The transport connection the event was observed on |
+| `Sequence` | Monotonic counter within the `SessionID` |
+| `CorrelationKey` | Groups the events of one source across sessions and connections — the join key used to rebuild an attack chain |
+
+The `ID` field keeps its historical per-protocol meaning and is left
+untouched.
+
 ## Beyond Beelzebub Runtime
 
 <BeyondRuntime />

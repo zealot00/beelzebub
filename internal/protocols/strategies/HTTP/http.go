@@ -69,7 +69,7 @@ func newHTTPHandler(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tra
 			resp.StatusCode = http.StatusMethodNotAllowed
 			resp.Headers = []string{"Allow:" + strings.Join(allowedMethods, ", ")}
 			resp.Body = http.StatusText(http.StatusMethodNotAllowed)
-			traceRequest(request, tr, parser.Command{}, servConf.Description, "", servConf.TrustedProxiesNets)
+			traceRequest(request, tr, parser.Command{}, servConf, "", servConf.TrustedProxiesNets)
 		} else {
 			// If none of the main commands matched, and we have a fallback command configured, process it here.
 			// The regexp is ignored for fallback commands, as they are catch-all for any request.
@@ -120,7 +120,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	if err == nil {
 		body = string(bodyBytes)
 	}
-	traceRequest(request, tr, command, servConf.Description, body, servConf.TrustedProxiesNets)
+	traceRequest(request, tr, command, servConf, body, servConf.TrustedProxiesNets)
 
 	if command.Plugin != "" {
 		host, _ := realClientAddr(request, servConf.TrustedProxiesNets)
@@ -171,7 +171,7 @@ func buildHTTPResponse(servConf parser.BeelzebubServiceConfiguration, tr tracer.
 	return resp, nil
 }
 
-func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, HoneypotDescription, body string, trustedProxies []*net.IPNet) {
+func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Command, servConf parser.BeelzebubServiceConfiguration, body string, trustedProxies []*net.IPNet) {
 	host, port := realClientAddr(request, trustedProxies)
 
 	remoteAddr := host
@@ -194,8 +194,13 @@ func traceRequest(request *http.Request, tr tracer.Tracer, command parser.Comman
 		SourceIp:        host,
 		SourcePort:      port,
 		ID:              uuid.New().String(),
-		Description:     HoneypotDescription,
+		Description:     servConf.Description,
 		Handler:         command.Name,
+		// HTTP has no transport session to hang an identifier on, so the
+		// source carries one: requests coming from the same peer inside the
+		// session window share a SessionID and a CorrelationKey.
+		SessionID:      tracer.SourceSession(tracer.HTTP.String(), host),
+		CorrelationKey: tracer.SourceKey(tracer.HTTP.String(), servConf.Address, host),
 	}
 	// Capture the TLS details from the request, if provided.
 	if request.TLS != nil {

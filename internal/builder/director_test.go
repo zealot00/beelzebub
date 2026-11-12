@@ -24,7 +24,7 @@ func TestBuildBeelzebub_Standard(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.NotNil(t, result.traceStrategy)
+	assert.NotEmpty(t, result.traceStrategies)
 }
 
 func TestBuildBeelzebub_StoresServicesConfig(t *testing.T) {
@@ -53,7 +53,7 @@ func TestBuildBeelzebub_BeelzebubCloud(t *testing.T) {
 	result, err := d.BuildBeelzebub(coreConfig, nil)
 
 	require.NoError(t, err)
-	assert.NotNil(t, result.traceStrategy)
+	assert.NotEmpty(t, result.traceStrategies)
 
 	// Verify the strategy is callable without panicking.
 	d.beelzebubCloudStrategy(tracer.Event{})

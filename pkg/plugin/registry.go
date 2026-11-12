@@ -107,3 +107,15 @@ func List() []Metadata {
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 	return list
 }
+
+// allPlugins returns the registered plugin instances sorted by name.
+func allPlugins() []Plugin {
+	mu.RLock()
+	defer mu.RUnlock()
+	plugins := make([]Plugin, 0, len(registry))
+	for _, p := range registry {
+		plugins = append(plugins, p)
+	}
+	sort.Slice(plugins, func(i, j int) bool { return plugins[i].Metadata().Name < plugins[j].Metadata().Name })
+	return plugins
+}

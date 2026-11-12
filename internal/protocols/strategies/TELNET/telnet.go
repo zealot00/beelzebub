@@ -82,6 +82,11 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 
 	host, port, _ := net.SplitHostPort(conn.RemoteAddr().String())
 
+	// The connection identifier ties the credential attempt to the session it
+	// may open; the correlation key groups every event of this source.
+	connID := uuid.New().String()
+	correlationKey := tracer.SourceKey(tracer.TELNET.String(), servConf.Address, host)
+
 	// Drain any unsolicited client negotiation requests
 	negotiateTelnet(conn)
 
@@ -121,16 +126,19 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 
 	// Trace authentication attempt
 	tr.TraceEvent(tracer.Event{
-		Msg:         "New TELNET Login Attempt",
-		Protocol:    tracer.TELNET.String(),
-		Status:      tracer.Stateless.String(),
-		User:        username,
-		Password:    password,
-		RemoteAddr:  conn.RemoteAddr().String(),
-		SourceIp:    host,
-		SourcePort:  port,
-		ID:          uuid.New().String(),
-		Description: servConf.Description,
+		Msg:            "New TELNET Login Attempt",
+		Protocol:       tracer.TELNET.String(),
+		Status:         tracer.Stateless.String(),
+		User:           username,
+		Password:       password,
+		RemoteAddr:     conn.RemoteAddr().String(),
+		SourceIp:       host,
+		SourcePort:     port,
+		ID:             uuid.New().String(),
+		SessionID:      connID,
+		ConnID:         connID,
+		CorrelationKey: correlationKey,
+		Description:    servConf.Description,
 	})
 
 	// Validate password
@@ -151,15 +159,18 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 	sessionKey := "TELNET" + host + username
 
 	tr.TraceEvent(tracer.Event{
-		Msg:         "New TELNET Terminal Session",
-		Protocol:    tracer.TELNET.String(),
-		RemoteAddr:  conn.RemoteAddr().String(),
-		SourceIp:    host,
-		SourcePort:  port,
-		Status:      tracer.Start.String(),
-		ID:          uuidSession.String(),
-		User:        username,
-		Description: servConf.Description,
+		Msg:            "New TELNET Terminal Session",
+		Protocol:       tracer.TELNET.String(),
+		RemoteAddr:     conn.RemoteAddr().String(),
+		SourceIp:       host,
+		SourcePort:     port,
+		Status:         tracer.Start.String(),
+		ID:             uuidSession.String(),
+		SessionID:      connID,
+		ConnID:         connID,
+		CorrelationKey: correlationKey,
+		User:           username,
+		Description:    servConf.Description,
 	})
 
 	// Load history for LLM context
@@ -236,18 +247,21 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 
 				// Trace interaction event
 				tr.TraceEvent(tracer.Event{
-					Msg:           "TELNET Terminal Session Interaction",
-					RemoteAddr:    conn.RemoteAddr().String(),
-					SourceIp:      host,
-					SourcePort:    port,
-					Status:        tracer.Interaction.String(),
-					Command:       commandInput,
-					CommandOutput: commandOutput,
-					ID:            uuidSession.String(),
-					Protocol:      tracer.TELNET.String(),
-					User:          username,
-					Description:   servConf.Description,
-					Handler:       handlerName,
+					Msg:            "TELNET Terminal Session Interaction",
+					RemoteAddr:     conn.RemoteAddr().String(),
+					SourceIp:       host,
+					SourcePort:     port,
+					Status:         tracer.Interaction.String(),
+					Command:        commandInput,
+					CommandOutput:  commandOutput,
+					ID:             uuidSession.String(),
+					SessionID:      connID,
+					ConnID:         connID,
+					CorrelationKey: correlationKey,
+					Protocol:       tracer.TELNET.String(),
+					User:           username,
+					Description:    servConf.Description,
+					Handler:        handlerName,
 				})
 
 				break // Found match, exit command loop
@@ -264,28 +278,34 @@ func handleTelnetConnection(conn net.Conn, servConf parser.BeelzebubServiceConfi
 
 			// Still trace the interaction even for unmatched commands
 			tr.TraceEvent(tracer.Event{
-				Msg:           "TELNET Terminal Session Interaction",
-				RemoteAddr:    conn.RemoteAddr().String(),
-				SourceIp:      host,
-				SourcePort:    port,
-				Status:        tracer.Interaction.String(),
-				Command:       commandInput,
-				CommandOutput: commandOutput,
-				ID:            uuidSession.String(),
-				Protocol:      tracer.TELNET.String(),
-				User:          username,
-				Description:   servConf.Description,
-				Handler:       "not_found",
+				Msg:            "TELNET Terminal Session Interaction",
+				RemoteAddr:     conn.RemoteAddr().String(),
+				SourceIp:       host,
+				SourcePort:     port,
+				Status:         tracer.Interaction.String(),
+				Command:        commandInput,
+				CommandOutput:  commandOutput,
+				ID:             uuidSession.String(),
+				SessionID:      connID,
+				ConnID:         connID,
+				CorrelationKey: correlationKey,
+				Protocol:       tracer.TELNET.String(),
+				User:           username,
+				Description:    servConf.Description,
+				Handler:        "not_found",
 			})
 		}
 	}
 
 	// Trace session end
 	tr.TraceEvent(tracer.Event{
-		Msg:      "End TELNET Session",
-		Status:   tracer.End.String(),
-		ID:       uuidSession.String(),
-		Protocol: tracer.TELNET.String(),
+		Msg:            "End TELNET Session",
+		Status:         tracer.End.String(),
+		ID:             uuidSession.String(),
+		SessionID:      connID,
+		ConnID:         connID,
+		CorrelationKey: correlationKey,
+		Protocol:       tracer.TELNET.String(),
 	})
 }
 

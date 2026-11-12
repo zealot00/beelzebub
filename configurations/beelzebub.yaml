@@ -8,6 +8,27 @@ core:
     rabbit-mq:
       enabled: false
       uri: ""
+    # Syslog pipeline: ships the runtime events to a central log server.
+    # transport: tcp | udp — framing only applies to tcp.
+    #   octet-counted  RFC 6587 length prefixed (default, recommended)
+    #   non-transparent LF delimited
+    # severity: auto derives the severity from the event status, or set one of
+    #   emergency, alert, critical, error, warning, notice, informational, debug
+    syslog:
+      enabled: false
+      address: "127.0.0.1:514"
+      protocol: "tcp"
+      framing: "octet-counted"
+      facility: "local0"
+      severity: "auto"
+      app-name: "beelzebub"
+      timeout-seconds: 5
+      tls:
+        enabled: false
+        ca-file: ""
+        cert-file: ""
+        key-file: ""
+        insecure-skip-verify: false
   prometheus:
     enabled: false
     path: "/metrics"

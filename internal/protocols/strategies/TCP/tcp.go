@@ -517,16 +517,20 @@ func serveStateless(conn net.Conn, servConf parser.BeelzebubServiceConfiguration
 		}
 	}
 	tr.TraceEvent(tracer.Event{
-		Msg:         "New TCP attempt",
-		Protocol:    tracer.TCP.String(),
-		Command:     command,
-		CommandRaw:  commandRaw,
-		Status:      tracer.Stateless.String(),
-		RemoteAddr:  conn.RemoteAddr().String(),
-		SourceIp:    host,
-		SourcePort:  port,
-		ID:          uuid.New().String(),
-		Description: servConf.Description,
+		Msg:        "New TCP attempt",
+		Protocol:   tracer.TCP.String(),
+		Command:    command,
+		CommandRaw: commandRaw,
+		Status:     tracer.Stateless.String(),
+		RemoteAddr: conn.RemoteAddr().String(),
+		SourceIp:   host,
+		SourcePort: port,
+		ID:         uuid.New().String(),
+		// A stateless probe has no connection session to hang an identifier
+		// on, so the source carries one.
+		SessionID:      tracer.SourceSession(tracer.TCP.String(), host),
+		CorrelationKey: tracer.SourceKey(tracer.TCP.String(), servConf.Address, host),
+		Description:    servConf.Description,
 	})
 }
 
@@ -547,20 +551,26 @@ func (s *tcpSession) serve(conn net.Conn) {
 	}()
 
 	s.tr.TraceEvent(tracer.Event{
-		Msg:         "New TCP Session",
-		Protocol:    tracer.TCP.String(),
-		RemoteAddr:  s.remoteAddr,
-		SourceIp:    s.host,
-		SourcePort:  s.port,
-		Status:      tracer.Start.String(),
-		ID:          s.connID,
-		Description: s.servConf.Description,
+		Msg:            "New TCP Session",
+		Protocol:       tracer.TCP.String(),
+		RemoteAddr:     s.remoteAddr,
+		SourceIp:       s.host,
+		SourcePort:     s.port,
+		Status:         tracer.Start.String(),
+		ID:             s.connID,
+		SessionID:      s.connID,
+		ConnID:         s.connID,
+		CorrelationKey: s.sessionKey,
+		Description:    s.servConf.Description,
 	})
 	defer s.tr.TraceEvent(tracer.Event{
-		Msg:      "End TCP Session",
-		Status:   tracer.End.String(),
-		ID:       s.connID,
-		Protocol: tracer.TCP.String(),
+		Msg:            "End TCP Session",
+		Status:         tracer.End.String(),
+		ID:             s.connID,
+		SessionID:      s.connID,
+		ConnID:         s.connID,
+		CorrelationKey: s.sessionKey,
+		Protocol:       tracer.TCP.String(),
 	})
 
 	histories := s.loadHistory()
@@ -747,18 +757,21 @@ func (s *tcpSession) handleMatch(command parser.Command, rawBuffer []byte, comma
 
 	// Build the trace event (will be emitted after wire-plugins enrich it).
 	ev := tracer.Event{
-		Msg:           "TCP Session Interaction",
-		RemoteAddr:    s.remoteAddr,
-		SourceIp:      s.host,
-		SourcePort:    s.port,
-		Status:        tracer.Interaction.String(),
-		Command:       commandInput,
-		CommandRaw:    commandRaw,
-		CommandOutput: commandOutput,
-		ID:            s.connID,
-		Protocol:      tracer.TCP.String(),
-		Description:   s.servConf.Description,
-		Handler:       handlerName,
+		Msg:            "TCP Session Interaction",
+		RemoteAddr:     s.remoteAddr,
+		SourceIp:       s.host,
+		SourcePort:     s.port,
+		Status:         tracer.Interaction.String(),
+		Command:        commandInput,
+		CommandRaw:     commandRaw,
+		CommandOutput:  commandOutput,
+		ID:             s.connID,
+		SessionID:      s.connID,
+		ConnID:         s.connID,
+		CorrelationKey: s.sessionKey,
+		Protocol:       tracer.TCP.String(),
+		Description:    s.servConf.Description,
+		Handler:        handlerName,
 	}
 
 	// Wire-plugin dispatch: protocol-specific post-processing runs here through
@@ -848,16 +861,19 @@ func (s *tcpSession) upgradeTLS(conn net.Conn) (net.Conn, bool) {
 // traceNotFound emits the interaction event for input that matched no command.
 func (s *tcpSession) traceNotFound(commandInput, commandRaw string) {
 	s.tr.TraceEvent(tracer.Event{
-		Msg:         "TCP Session Interaction",
-		RemoteAddr:  s.remoteAddr,
-		SourceIp:    s.host,
-		SourcePort:  s.port,
-		Status:      tracer.Interaction.String(),
-		Command:     commandInput,
-		CommandRaw:  commandRaw,
-		ID:          s.connID,
-		Protocol:    tracer.TCP.String(),
-		Description: s.servConf.Description,
-		Handler:     "not_found",
+		Msg:            "TCP Session Interaction",
+		RemoteAddr:     s.remoteAddr,
+		SourceIp:       s.host,
+		SourcePort:     s.port,
+		Status:         tracer.Interaction.String(),
+		Command:        commandInput,
+		CommandRaw:     commandRaw,
+		ID:             s.connID,
+		SessionID:      s.connID,
+		ConnID:         s.connID,
+		CorrelationKey: s.sessionKey,
+		Protocol:       tracer.TCP.String(),
+		Description:    s.servConf.Description,
+		Handler:        "not_found",
 	})
 }

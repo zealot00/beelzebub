@@ -13,7 +13,7 @@ func TestInit(t *testing.T) {
 
 	tracer := GetInstance(mockStrategy)
 
-	assert.NotNil(t, tracer.strategy)
+	assert.NotEmpty(t, tracer.strategies)
 }
 
 func TestTraceEvent(t *testing.T) {
@@ -28,7 +28,7 @@ func TestTraceEvent(t *testing.T) {
 
 	tracer := GetInstance(mockStrategy)
 
-	tracer.strategy = mockStrategy
+	tracer.SetStrategies([]Strategy{mockStrategy})
 
 	wg.Add(1)
 	tracer.TraceEvent(Event{
@@ -103,7 +103,7 @@ func newTracerWithMockCounters(strategy Strategy) (*tracer, map[string]*mockCoun
 		"telnet": {},
 	}
 	tr := &tracer{
-		strategy:          strategy,
+		strategies:        []Strategy{strategy},
 		eventsChan:        make(chan Event, Workers),
 		eventsTotal:       counters["total"],
 		eventsSSHTotal:    counters["ssh"],

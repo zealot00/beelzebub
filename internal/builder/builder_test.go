@@ -76,9 +76,9 @@ func TestBuilderClose_NilLogFile(t *testing.T) {
 func TestSetTraceStrategy(t *testing.T) {
 	b := NewBuilder()
 	strategy := func(event tracer.Event) {}
-	b.setTraceStrategy(strategy)
-	if b.traceStrategy == nil {
-		t.Errorf("expected traceStrategy to be set")
+	b.setTraceStrategies([]tracer.Strategy{strategy})
+	if len(b.traceStrategies) == 0 {
+		t.Errorf("expected traceStrategies to be set")
 	}
 }
 
@@ -113,7 +113,7 @@ func TestBuilderRun_Empty(t *testing.T) {
 	b.beelzebubServicesConfiguration = []parser.BeelzebubServiceConfiguration{}
 
 	// Set trace strategy to avoid nil pointer
-	b.traceStrategy = func(event tracer.Event) {}
+	b.traceStrategies = []tracer.Strategy{func(event tracer.Event) {}}
 
 	err := b.Run()
 	if err != nil {
@@ -137,7 +137,7 @@ func TestBuilderRun_PrometheusDisabled(t *testing.T) {
 				enabled+"\n    path: /disabled-metrics\n    port: "+address+"\n"), config))
 			b := NewBuilder()
 			b.beelzebubCoreConfigurations = config
-			b.traceStrategy = func(event tracer.Event) {}
+			b.traceStrategies = []tracer.Strategy{func(event tracer.Event) {}}
 			t.Cleanup(func() { assert.NoError(t, b.Close()) })
 
 			require.NoError(t, b.Run())
@@ -165,7 +165,7 @@ func TestBuilderRun_PrometheusEnabled(t *testing.T) {
 	b.beelzebubCoreConfigurations.Core.Prometheus = parser.Prometheus{
 		Enabled: true, Path: "/custom-metrics", Port: "127.0.0.1:0",
 	}
-	b.traceStrategy = func(event tracer.Event) {}
+	b.traceStrategies = []tracer.Strategy{func(event tracer.Event) {}}
 	t.Cleanup(func() { assert.NoError(t, b.Close()) })
 	require.NoError(t, b.Run())
 	require.NotNil(t, b.prometheusServer)
@@ -211,7 +211,7 @@ func TestBuilderRun_AllProtocols(t *testing.T) {
 		{Protocol: "mcp", Address: "127.0.0.1:0"},
 	}
 
-	b.traceStrategy = func(event tracer.Event) {}
+	b.traceStrategies = []tracer.Strategy{func(event tracer.Event) {}}
 
 	err := b.Run()
 	if err != nil {

@@ -1,0 +1,94 @@
+---
+title: Syslog Pipeline
+description: Ship the runtime events to a central log server over RFC 5424 syslog.
+---
+
+The runtime writes every event to the local log. The syslog pipeline is an
+additional, independent output: when it is enabled the same events are also
+delivered to a central syslog server, so the honeypot activity does not stay
+stranded on the honeypot host.
+
+The pipeline is configured under `core.tracings.syslog`, next to the RabbitMQ
+tracing:
+
+```yaml
+core:
+  tracings:
+    syslog:
+      enabled: true
+      address: "logs.internal:514"
+      protocol: "tcp"          # tcp | udp
+      framing: "octet-counted" # octet-counted | non-transparent (tcp only)
+      facility: "local3"
+      severity: "auto"         # auto | emergency | alert | critical | error | warning | notice | informational | debug
+      app-name: "honeypot"
+      timeout-seconds: 5
+      tls:
+        enabled: false
+        ca-file: ""
+        cert-file: ""
+        key-file: ""
+        insecure-skip-verify: false
+```
+
+Every field can also be set through the environment:
+`BEELZEBUB_SYSLOG_ENABLED`, `BEELZEBUB_SYSLOG_ADDRESS`, `BEELZEBUB_SYSLOG_PROTOCOL`,
+`BEELZEBUB_SYSLOG_FACILITY`, `BEELZEBUB_SYSLOG_SEVERITY`, `BEELZEBUB_SYSLOG_APP_NAME`,
+`BEELZEBUB_SYSLOG_TLS_ENABLED` and `BEELZEBUB_SYSLOG_TLS_CA_FILE`.
+
+## Message format
+
+Messages follow RFC 5424. The event itself is the JSON encoded `MSG` part, and
+a structured data element carries the identifiers needed to correlate and
+deduplicate the records:
+
+```
+<157>1 2026-11-12T10:10:53Z host honeypot 94174 http [beelzebub@32473 src="10.0.0.5" proto="HTTP" session="..." correlation="HTTP|:8080|10.0.0.5" eventid="..."] {"DateTime":"...","Protocol":"HTTP", ...}
+```
+
+The priority is `facility * 8 + severity`. With `severity: auto` the severity
+follows the event status: a probe that never reached an interaction is
+`notice`, an interaction is `warning`, and the session lifecycle events are
+`informational`.
+
+With `framing: octet-counted` the TCP transport prefixes every message with
+its byte length as described by RFC 6587, which is what rsyslog, syslog-ng and
+the Elastic receivers expect. `non-transparent` sends LF terminated messages
+instead.
+
+## Delivery guarantees
+
+The connection is opened lazily and re-established after a failure, so a log
+server that is down never prevents the honeypot from starting and never
+interrupts the capture. A delivery failure is logged as a warning and the
+event is dropped — the local log keeps the full history.
+
+Each output is independent: enabling the syslog pipeline, RabbitMQ and the
+Beelzebub Cloud at the same time delivers the events to all three, instead of
+replacing one with another.
+
+## TLS
+
+TLS requires the `tcp` transport. Provide a CA file to verify the server, and
+a certificate and a key for the client identity:
+
+```yaml
+core:
+  tracings:
+    syslog:
+      enabled: true
+      address: "logs.internal:6514"
+      protocol: "tcp"
+      tls:
+        enabled: true
+        ca-file: "/etc/ssl/certs/log-server-ca.pem"
+        cert-file: "/etc/ssl/certs/honeypot.pem"
+        key-file: "/etc/ssl/private/honeypot.key"
+```
+
+## Checklist
+
+- Use a dedicated facility for the honeypot so the records can be routed apart from the rest of the log.
+- Keep the captured content inside the perimeter: the pipeline ships the full event, including credentials and request bodies.
+- Pin the transport with TLS when the log server is not on the same host.
+- The `logsPath` file remains the local copy: point it at the volume that is archived with the honeypot.

@@ -40,6 +40,42 @@ type Logging struct {
 // Tracings is the struct that contains the configurations of the tracings
 type Tracings struct {
 	RabbitMQ `yaml:"rabbit-mq"`
+	Syslog   `yaml:"syslog"`
+}
+
+// Syslog is the struct that contains the configuration of the syslog pipeline.
+//
+// It describes a RFC 5424 syslog sink that receives the same events as the
+// local log, so that the honeypot activity can be shipped to a central log
+// server instead of being stranded on the honeypot host.
+type Syslog struct {
+	Enabled bool   `yaml:"enabled"`
+	Address string `yaml:"address"`
+	// Protocol is the transport used to reach the server: "tcp" or "udp".
+	Protocol string `yaml:"protocol"`
+	// Framing selects the TCP framing: "octet-counted" (RFC 6587) or
+	// "non-transparent" (LF delimited). It is ignored for UDP.
+	Framing string `yaml:"framing"`
+	// Facility is the syslog facility, e.g. "local0".
+	Facility string `yaml:"facility"`
+	// Severity is the syslog severity, e.g. "informational". The special
+	// value "auto" derives the severity from the event status.
+	Severity string `yaml:"severity"`
+	// AppName is the APP-NAME field of the RFC 5424 header.
+	AppName string `yaml:"app-name"`
+	// TimeoutSeconds bounds the connect and write operations.
+	TimeoutSeconds int       `yaml:"timeout-seconds"`
+	TLS            SyslogTLS `yaml:"tls"`
+}
+
+// SyslogTLS is the struct that contains the TLS configuration of the syslog
+// pipeline. TLS is only used with the "tcp" transport.
+type SyslogTLS struct {
+	Enabled            bool   `yaml:"enabled"`
+	CAFile             string `yaml:"ca-file"`
+	CertFile           string `yaml:"cert-file"`
+	KeyFile            string `yaml:"key-file"`
+	InsecureSkipVerify bool   `yaml:"insecure-skip-verify"`
 }
 
 type BeelzebubCloud struct {
@@ -257,6 +293,9 @@ func (bp configurationsParser) ReadConfigurationsCore() (*BeelzebubCoreConfigura
 //	BEELZEBUB_LOGGING_DEBUG, BEELZEBUB_LOGGING_DEBUG_REPORT_CALLER,
 //	BEELZEBUB_LOGGING_LOG_DISABLE_TIMESTAMP, BEELZEBUB_LOGGING_LOGS_PATH,
 //	BEELZEBUB_RABBITMQ_ENABLED, BEELZEBUB_RABBITMQ_URI,
+//	BEELZEBUB_SYSLOG_ENABLED, BEELZEBUB_SYSLOG_ADDRESS, BEELZEBUB_SYSLOG_PROTOCOL,
+//	BEELZEBUB_SYSLOG_FACILITY, BEELZEBUB_SYSLOG_SEVERITY, BEELZEBUB_SYSLOG_APP_NAME,
+//	BEELZEBUB_SYSLOG_TLS_ENABLED, BEELZEBUB_SYSLOG_TLS_CA_FILE,
 //	BEELZEBUB_PROMETHEUS_ENABLED, BEELZEBUB_PROMETHEUS_PATH, BEELZEBUB_PROMETHEUS_PORT,
 //	BEELZEBUB_CLOUD_ENABLED, BEELZEBUB_CLOUD_URI, BEELZEBUB_CLOUD_AUTH_TOKEN
 func applyEnvOverrides(cfg *BeelzebubCoreConfigurations) error {
@@ -300,6 +339,38 @@ func applyEnvOverrides(cfg *BeelzebubCoreConfigurations) error {
 	}
 	if v := os.Getenv("BEELZEBUB_RABBITMQ_URI"); v != "" {
 		cfg.Core.Tracings.RabbitMQ.URI = v
+	}
+	if v := os.Getenv("BEELZEBUB_SYSLOG_ENABLED"); v != "" {
+		parsed, err := parse("BEELZEBUB_SYSLOG_ENABLED", v)
+		if err != nil {
+			return err
+		}
+		cfg.Core.Tracings.Syslog.Enabled = parsed
+	}
+	if v := os.Getenv("BEELZEBUB_SYSLOG_ADDRESS"); v != "" {
+		cfg.Core.Tracings.Syslog.Address = v
+	}
+	if v := os.Getenv("BEELZEBUB_SYSLOG_PROTOCOL"); v != "" {
+		cfg.Core.Tracings.Syslog.Protocol = v
+	}
+	if v := os.Getenv("BEELZEBUB_SYSLOG_FACILITY"); v != "" {
+		cfg.Core.Tracings.Syslog.Facility = v
+	}
+	if v := os.Getenv("BEELZEBUB_SYSLOG_SEVERITY"); v != "" {
+		cfg.Core.Tracings.Syslog.Severity = v
+	}
+	if v := os.Getenv("BEELZEBUB_SYSLOG_APP_NAME"); v != "" {
+		cfg.Core.Tracings.Syslog.AppName = v
+	}
+	if v := os.Getenv("BEELZEBUB_SYSLOG_TLS_ENABLED"); v != "" {
+		parsed, err := parse("BEELZEBUB_SYSLOG_TLS_ENABLED", v)
+		if err != nil {
+			return err
+		}
+		cfg.Core.Tracings.Syslog.TLS.Enabled = parsed
+	}
+	if v := os.Getenv("BEELZEBUB_SYSLOG_TLS_CA_FILE"); v != "" {
+		cfg.Core.Tracings.Syslog.TLS.CAFile = v
 	}
 	if v := os.Getenv("BEELZEBUB_PROMETHEUS_ENABLED"); v != "" {
 		parsed, err := parse("BEELZEBUB_PROMETHEUS_ENABLED", v)

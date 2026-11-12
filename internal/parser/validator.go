@@ -341,6 +341,8 @@ func ValidateCore(config *BeelzebubCoreConfigurations, filename string) Validate
 		})
 	}
 
+	issues = append(issues, validateSyslog(config.Core.Tracings.Syslog, filename)...)
+
 	if config.Core.BeelzebubCloud.Enabled {
 		if config.Core.BeelzebubCloud.URI == "" {
 			issues = append(issues, ValidationIssue{
@@ -406,4 +408,112 @@ func ValidateCore(config *BeelzebubCoreConfigurations, filename string) Validate
 		TotalErrors:   totalErrors,
 		TotalWarnings: len(issues) - totalErrors,
 	}
+}
+
+// validateSyslog checks the syslog pipeline configuration.
+func validateSyslog(config Syslog, filename string) []ValidationIssue {
+	if !config.Enabled {
+		return nil
+	}
+
+	var issues []ValidationIssue
+
+	if config.Address == "" {
+		issues = append(issues, ValidationIssue{
+			Level:    LevelError,
+			Message:  "syslog is enabled but address is empty",
+			Filename: filename,
+		})
+	} else if !strings.Contains(config.Address, ":") {
+		issues = append(issues, ValidationIssue{
+			Level:    LevelError,
+			Message:  fmt.Sprintf("syslog address %q must be host:port", config.Address),
+			Filename: filename,
+		})
+	}
+
+	protocol := strings.ToLower(strings.TrimSpace(config.Protocol))
+	if protocol != "" && protocol != "tcp" && protocol != "udp" {
+		issues = append(issues, ValidationIssue{
+			Level:    LevelError,
+			Message:  fmt.Sprintf("syslog protocol %q must be tcp or udp", config.Protocol),
+			Filename: filename,
+		})
+	}
+
+	framing := strings.ToLower(strings.TrimSpace(config.Framing))
+	if framing != "" && framing != "octet-counted" && framing != "non-transparent" {
+		issues = append(issues, ValidationIssue{
+			Level:    LevelError,
+			Message:  fmt.Sprintf("syslog framing %q must be octet-counted or non-transparent", config.Framing),
+			Filename: filename,
+		})
+	}
+
+	facility := strings.ToLower(strings.TrimSpace(config.Facility))
+	if facility != "" && !isValidSyslogFacility(facility) {
+		issues = append(issues, ValidationIssue{
+			Level:    LevelError,
+			Message:  fmt.Sprintf("syslog facility %q is not a known facility", config.Facility),
+			Filename: filename,
+		})
+	}
+
+	severity := strings.ToLower(strings.TrimSpace(config.Severity))
+	if severity != "" && severity != "auto" && !isValidSyslogSeverity(severity) {
+		issues = append(issues, ValidationIssue{
+			Level:    LevelError,
+			Message:  fmt.Sprintf("syslog severity %q must be auto or a known severity", config.Severity),
+			Filename: filename,
+		})
+	}
+
+	if config.TLS.Enabled && protocol == "udp" {
+		issues = append(issues, ValidationIssue{
+			Level:    LevelError,
+			Message:  "syslog TLS requires the tcp protocol",
+			Filename: filename,
+		})
+	}
+
+	if config.TLS.Enabled {
+		if config.TLS.CertFile != "" && config.TLS.KeyFile == "" {
+			issues = append(issues, ValidationIssue{
+				Level:    LevelError,
+				Message:  "syslog TLS cert-file is set but key-file is empty",
+				Filename: filename,
+			})
+		}
+		if config.TLS.KeyFile != "" && config.TLS.CertFile == "" {
+			issues = append(issues, ValidationIssue{
+				Level:    LevelError,
+				Message:  "syslog TLS key-file is set but cert-file is empty",
+				Filename: filename,
+			})
+		}
+	}
+
+	return issues
+}
+
+// isValidSyslogFacility reports whether the facility is a known RFC 5424 one.
+func isValidSyslogFacility(facility string) bool {
+	switch facility {
+	case "kern", "user", "mail", "daemon", "auth", "syslog", "lpr", "news",
+		"uucp", "cron", "authpriv", "ftp",
+		"local0", "local1", "local2", "local3", "local4", "local5", "local6", "local7":
+		return true
+	}
+	return false
+}
+
+// isValidSyslogSeverity reports whether the severity is a known RFC 5424 one.
+func isValidSyslogSeverity(severity string) bool {
+	switch severity {
+	case "emergency", "alert", "critical", "error", "warning", "notice",
+		"informational", "debug",
+		"panic", "crit", "err", "warn", "info":
+		return true
+	}
+	return false
 }

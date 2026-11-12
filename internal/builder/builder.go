@@ -31,17 +31,27 @@ const RabbitmqQueueName = "event"
 type Builder struct {
 	beelzebubServicesConfiguration []parser.BeelzebubServiceConfiguration
 	beelzebubCoreConfigurations    *parser.BeelzebubCoreConfigurations
-	traceStrategy                  tracer.Strategy
+	traceStrategies                []tracer.Strategy
 	rabbitMQChannel                *amqp.Channel
 	rabbitMQConnection             *amqp.Connection
+	syslogClient                   *syslogClient
 	logsFile                       *os.File
 	startedServices                []plugin.ServicePlugin
 	servicesCancel                 context.CancelFunc
 	prometheusServer               *http.Server
 }
 
-func (b *Builder) setTraceStrategy(traceStrategy tracer.Strategy) {
-	b.traceStrategy = traceStrategy
+// setTraceStrategies replaces the event sinks of the runtime.
+func (b *Builder) setTraceStrategies(strategies []tracer.Strategy) {
+	b.traceStrategies = strategies
+}
+
+// addTraceStrategy appends an event sink to the runtime.
+//
+// Sinks are independent: enabling several of them delivers every event to
+// each of them instead of overriding the previously configured one.
+func (b *Builder) addTraceStrategy(strategy tracer.Strategy) {
+	b.traceStrategies = append(b.traceStrategies, strategy)
 }
 
 func (b *Builder) buildLogger(configurations parser.Logging) error {
@@ -90,6 +100,18 @@ func (b *Builder) buildRabbitMQ(rabbitMQURI string) error {
 	return nil
 }
 
+// buildSyslog prepares the syslog pipeline. The connection itself is
+// established lazily, so an unreachable log server never blocks the startup.
+func (b *Builder) buildSyslog(conf parser.Syslog) error {
+	client, err := newSyslogClient(conf)
+	if err != nil {
+		return err
+	}
+
+	b.syslogClient = client
+	return nil
+}
+
 func (b *Builder) Close() error {
 	if b.prometheusServer != nil {
 		if err := b.prometheusServer.Close(); err != nil {
@@ -119,6 +141,13 @@ func (b *Builder) Close() error {
 			return err
 		}
 		if err := b.rabbitMQConnection.Close(); err != nil {
+			return err
+		}
+	}
+
+	// Close the syslog connection
+	if b.syslogClient != nil {
+		if err := b.syslogClient.Close(); err != nil {
 			return err
 		}
 	}
@@ -157,8 +186,18 @@ Deception runtime framework, happy hacking!`)
 	modelContextProtocolStrategy := &MCP.MCPStrategy{}
 	telnetStrategy := &TELNET.TelnetStrategy{}
 
+	// Install the event sinks and publish the event bus to the plugin SDK,
+	// so that plugins can observe every event from now on.
+	tracerInstance := tracer.GetInstance(nil)
+	tracerInstance.SetStrategies(b.traceStrategies)
+	plugin.SetEventBus(tracerInstance)
+
 	// Init Tracer strategies, and set the trace strategy default HTTP
-	protocolManager := protocols.InitProtocolManager(b.traceStrategy, hypertextTransferProtocolStrategy)
+	var defaultStrategy tracer.Strategy
+	if len(b.traceStrategies) > 0 {
+		defaultStrategy = b.traceStrategies[0]
+	}
+	protocolManager := protocols.InitProtocolManager(defaultStrategy, hypertextTransferProtocolStrategy)
 
 	if b.beelzebubCoreConfigurations.Core.BeelzebubCloud.Enabled {
 		conf := b.beelzebubCoreConfigurations.Core.BeelzebubCloud
@@ -222,12 +261,15 @@ func (b *Builder) startPrometheus() error {
 	return nil
 }
 
+// build returns the assembled builder.
+//
+// The builder is returned as is instead of being copied: the event strategies
+// hold a reference to it, so a copy would split the runtime state — the log
+// file, the RabbitMQ channels and the syslog client would stay on one side
+// while the running builder used the other, and the resources opened during
+// the assembly would never be released.
 func (b *Builder) build() *Builder {
-	return &Builder{
-		beelzebubServicesConfiguration: b.beelzebubServicesConfiguration,
-		traceStrategy:                  b.traceStrategy,
-		beelzebubCoreConfigurations:    b.beelzebubCoreConfigurations,
-	}
+	return b
 }
 
 func NewBuilder() *Builder {

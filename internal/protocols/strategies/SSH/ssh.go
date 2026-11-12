@@ -37,9 +37,11 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 			Version:     servConf.ServerVersion,
 			Handler: func(sess ssh.Session) {
 				uuidSession := uuid.New()
+				connID := sshConnectionID(sess.Context())
 
 				host, port, _ := net.SplitHostPort(sess.RemoteAddr().String())
 				sessionKey := "SSH" + host + sess.User()
+				correlationKey := tracer.SourceKey(tracer.SSH.String(), servConf.Address, host)
 
 				// Inline SSH command
 				if sess.RawCommand() != "" {
@@ -78,19 +80,22 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 							sess.Write(append([]byte(commandOutput), '\n'))
 
 							tr.TraceEvent(tracer.Event{
-								Msg:           "SSH Raw Command",
-								Protocol:      tracer.SSH.String(),
-								RemoteAddr:    sess.RemoteAddr().String(),
-								SourceIp:      host,
-								SourcePort:    port,
-								Status:        tracer.Start.String(),
-								ID:            uuidSession.String(),
-								Environ:       strings.Join(sess.Environ(), ","),
-								User:          sess.User(),
-								Description:   servConf.Description,
-								Command:       sess.RawCommand(),
-								CommandOutput: commandOutput,
-								Handler:       command.Name,
+								Msg:            "SSH Raw Command",
+								Protocol:       tracer.SSH.String(),
+								RemoteAddr:     sess.RemoteAddr().String(),
+								SourceIp:       host,
+								SourcePort:     port,
+								Status:         tracer.Start.String(),
+								ID:             uuidSession.String(),
+								SessionID:      connID,
+								ConnID:         connID,
+								CorrelationKey: correlationKey,
+								Environ:        strings.Join(sess.Environ(), ","),
+								User:           sess.User(),
+								Description:    servConf.Description,
+								Command:        sess.RawCommand(),
+								CommandOutput:  commandOutput,
+								Handler:        command.Name,
 							})
 							return
 						}
@@ -98,16 +103,19 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				}
 
 				tr.TraceEvent(tracer.Event{
-					Msg:         "New SSH Terminal Session",
-					Protocol:    tracer.SSH.String(),
-					RemoteAddr:  sess.RemoteAddr().String(),
-					SourceIp:    host,
-					SourcePort:  port,
-					Status:      tracer.Start.String(),
-					ID:          uuidSession.String(),
-					Environ:     strings.Join(sess.Environ(), ","),
-					User:        sess.User(),
-					Description: servConf.Description,
+					Msg:            "New SSH Terminal Session",
+					Protocol:       tracer.SSH.String(),
+					RemoteAddr:     sess.RemoteAddr().String(),
+					SourceIp:       host,
+					SourcePort:     port,
+					Status:         tracer.Start.String(),
+					ID:             uuidSession.String(),
+					SessionID:      connID,
+					ConnID:         connID,
+					CorrelationKey: correlationKey,
+					Environ:        strings.Join(sess.Environ(), ","),
+					User:           sess.User(),
+					Description:    servConf.Description,
 				})
 
 				terminal := term.NewTerminal(sess, buildPrompt(sess.User(), servConf.ServerName))
@@ -155,17 +163,20 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 							terminal.Write(append([]byte(commandOutput), '\n'))
 
 							tr.TraceEvent(tracer.Event{
-								Msg:           "SSH Terminal Session Interaction",
-								RemoteAddr:    sess.RemoteAddr().String(),
-								SourceIp:      host,
-								SourcePort:    port,
-								Status:        tracer.Interaction.String(),
-								Command:       commandInput,
-								CommandOutput: commandOutput,
-								ID:            uuidSession.String(),
-								Protocol:      tracer.SSH.String(),
-								Description:   servConf.Description,
-								Handler:       command.Name,
+								Msg:            "SSH Terminal Session Interaction",
+								RemoteAddr:     sess.RemoteAddr().String(),
+								SourceIp:       host,
+								SourcePort:     port,
+								Status:         tracer.Interaction.String(),
+								Command:        commandInput,
+								CommandOutput:  commandOutput,
+								ID:             uuidSession.String(),
+								SessionID:      connID,
+								ConnID:         connID,
+								CorrelationKey: correlationKey,
+								Protocol:       tracer.SSH.String(),
+								Description:    servConf.Description,
+								Handler:        command.Name,
 							})
 							break // Inner range over commands.
 						}
@@ -173,27 +184,37 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 				}
 
 				tr.TraceEvent(tracer.Event{
-					Msg:      "End SSH Session",
-					Status:   tracer.End.String(),
-					ID:       uuidSession.String(),
-					Protocol: tracer.SSH.String(),
+					Msg:            "End SSH Session",
+					Status:         tracer.End.String(),
+					ID:             uuidSession.String(),
+					SessionID:      connID,
+					ConnID:         connID,
+					CorrelationKey: correlationKey,
+					Protocol:       tracer.SSH.String(),
 				})
 			},
 			PasswordHandler: func(ctx ssh.Context, password string) bool {
 				host, port, _ := net.SplitHostPort(ctx.RemoteAddr().String())
+				connID := sshConnectionID(ctx)
+				correlationKey := tracer.SourceKey(tracer.SSH.String(), servConf.Address, host)
 
 				tr.TraceEvent(tracer.Event{
-					Msg:         "New SSH Login Attempt",
-					Protocol:    tracer.SSH.String(),
-					Status:      tracer.Stateless.String(),
-					User:        ctx.User(),
-					Password:    password,
-					Client:      ctx.ClientVersion(),
-					RemoteAddr:  ctx.RemoteAddr().String(),
-					SourceIp:    host,
-					SourcePort:  port,
-					ID:          uuid.New().String(),
-					Description: servConf.Description,
+					Msg:        "New SSH Login Attempt",
+					Protocol:   tracer.SSH.String(),
+					Status:     tracer.Stateless.String(),
+					User:       ctx.User(),
+					Password:   password,
+					Client:     ctx.ClientVersion(),
+					RemoteAddr: ctx.RemoteAddr().String(),
+					SourceIp:   host,
+					SourcePort: port,
+					ID:         uuid.New().String(),
+					// The transport session identifier links the credential
+					// attempt to the session it may open.
+					SessionID:      connID,
+					ConnID:         connID,
+					CorrelationKey: correlationKey,
+					Description:    servConf.Description,
 				})
 				matched, err := regexp.MatchString(servConf.PasswordRegex, password)
 				if err != nil {
@@ -218,4 +239,21 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 
 func buildPrompt(user string, serverName string) string {
 	return fmt.Sprintf("%s@%s:~$ ", user, serverName)
+}
+
+// sshConnectionID returns a stable identifier for the SSH transport
+// connection.
+//
+// The identifier is derived from the SSH session identifier negotiated during
+// the key exchange, so it is the same value in the credential callback and in
+// the session handler. That is what allows a login attempt to be correlated
+// with the session it opens.
+func sshConnectionID(ctx ssh.Context) string {
+	if ctx == nil {
+		return uuid.New().String()
+	}
+	if id := ctx.SessionID(); id != "" {
+		return id
+	}
+	return uuid.New().String()
 }

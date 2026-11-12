@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
 )
@@ -210,7 +211,13 @@ func prepareAttackerInput(raw string, maxLength int, redact bool) (string, bool)
 
 	truncated := false
 	if len(cleaned) > maxLength {
-		cleaned = cleaned[:maxLength]
+		// The cut is made on a rune boundary: a half character would reach
+		// the model as a broken sequence.
+		cut := maxLength
+		for cut > 0 && !utf8.RuneStart(cleaned[cut]) {
+			cut--
+		}
+		cleaned = cleaned[:cut]
 		truncated = true
 	}
 

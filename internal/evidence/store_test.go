@@ -231,3 +231,28 @@ func TestStoreTightensAnExistingDirectory(t *testing.T) {
 	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(),
 		"an existing directory must be tightened: the samples are hostile content")
 }
+
+func TestTheDeduplicationTableIsBounded(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "samples")
+	store, err := NewStore(parser.Evidence{
+		Enabled:      true,
+		Path:         root,
+		MinSizeBytes: 1,
+		MaxSizeBytes: 1 << 20,
+	})
+	require.NoError(t, err)
+
+	// More distinct payloads than the table may hold.
+	for i := 0; i < maxKnownSamples+50; i++ {
+		store.Handle(plugin.Event{
+			Protocol:   "HTTP",
+			Body:       strings.Repeat("A", 8) + strings.Repeat("B", i%17) + string(rune('a'+i%26)) + strings.Repeat("C", i%13),
+			RequestURI: "/x",
+			EventID:    "bounded",
+		})
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	assert.LessOrEqual(t, len(store.seen), maxKnownSamples, "the deduplication table must stay bounded")
+}

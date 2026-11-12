@@ -3,6 +3,7 @@ package plugins
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/beelzebub-labs/beelzebub/v3/internal/tracer"
 	"github.com/stretchr/testify/assert"
@@ -261,4 +262,16 @@ func TestPrepareInputRecordsTheTruncation(t *testing.T) {
 
 	metadata := honeypot.EventMetadata()
 	assert.Equal(t, "true", metadata["llm_truncated"])
+}
+
+func TestPrepareAttackerInputCutsOnARuneBoundary(t *testing.T) {
+	// The cut must not leave half a character: a broken sequence would reach
+	// the model as garbage.
+	payload := "中文测试内容abcdef"
+
+	prepared, truncated := prepareAttackerInput(payload, 5, false)
+
+	require.True(t, truncated)
+	assert.True(t, utf8.ValidString(prepared), "the cut must land on a rune boundary")
+	assert.Equal(t, "中", prepared)
 }

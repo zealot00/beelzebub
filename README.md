@@ -125,11 +125,11 @@ go test -race ./...   # concurrency
 | `make build` | OK |
 | `go vet ./...` | OK |
 | `gofmt -l .` | clean |
-| `make test.unit` | 21 packages, 1029 cases, all green |
+| `make test.unit` | 21 packages, 1033 cases, all green |
 | `go test -race ./...` | clean, no data race |
 | `make validate-all` | 0 errors, 6 warnings (all pre-existing upstream) |
 | `make check.docs` | the two READMEs carry the same numbers, and they match the suite |
-| `make adversarial` | 91 cases in 23 groups, all green |
+| `make adversarial` | 92 cases in 24 groups, all green |
 
 The adversarial suite covers the three attacks that matter for a decoy:
 

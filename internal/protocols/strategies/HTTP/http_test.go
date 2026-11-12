@@ -688,3 +688,32 @@ func TestInit_HandlerFunc(t *testing.T) {
 	strategy.Init(conf, tr)
 	time.Sleep(50 * time.Millisecond)
 }
+
+// TestEveryRequestIsRecorded asserts that no interaction is dropped.
+//
+// A request that matches no rule, on a service without a fallback, used to
+// be answered with an empty response and never recorded: the decoy lost the
+// evidence of exactly the probes it did not anticipate.
+func TestEveryRequestIsRecorded(t *testing.T) {
+	servConf := parser.BeelzebubServiceConfiguration{
+		Address:  ":0",
+		Protocol: "http",
+		Commands: []parser.Command{
+			{Regex: regexp.MustCompile("^/known$"), Handler: "ok", StatusCode: 200},
+		},
+	}
+
+	mt := &mockTracer{}
+
+	// A request that matches nothing, on a service without a fallback.
+	request := httptest.NewRequest(http.MethodGet, "http://decoy.internal/unexpected", nil)
+	request.RemoteAddr = "10.0.0.5:51234"
+
+	handler := newHTTPHandler(servConf, mt)
+	handler(httptest.NewRecorder(), request)
+
+	require.Len(t, mt.events, 1, "the interaction must be recorded")
+	assert.Equal(t, "HTTP New request", mt.events[0].Msg)
+	assert.True(t, strings.HasSuffix(mt.events[0].RequestURI, "/unexpected"),
+		"the request must be recorded, got %q", mt.events[0].RequestURI)
+}

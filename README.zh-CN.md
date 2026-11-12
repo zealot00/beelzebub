@@ -172,8 +172,8 @@ go test -race ./...   # 并发
 | `make build` | OK |
 | `go vet ./...` | OK |
 | `gofmt -l .` | clean |
-| `make test.unit` | 21 个包,1029 个用例,全绿 |
-| `make adversarial` | 91 个用例 / 23 组,全绿 |
+| `make test.unit` | 21 个包,1033 个用例,全绿 |
+| `make adversarial` | 92 个用例 / 24 组,全绿 |
 | `go test -race ./...` | 干净,无 data race |
 | `make validate-all` | 0 errors,6 warnings(全部为上游既有) |
 | `make check.docs` | 两份 README 数字一致,且与实际测试结果一致 |

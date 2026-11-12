@@ -43,8 +43,17 @@ type Store struct {
 
 	mu       sync.Mutex
 	seen     map[string]*Sample
+	order    []string
 	disabled bool
 }
+
+// maxKnownSamples bounds the deduplication table.
+//
+// The table only exists to count the occurrences of a payload. A honeypot
+// that runs for months sees a lot of distinct payloads, and the table must
+// not grow without bound: the oldest entries are dropped, and a payload that
+// comes back is simply written again.
+const maxKnownSamples = 4096
 
 // Sample describes one stored payload.
 type Sample struct {
@@ -171,6 +180,15 @@ func (s *Store) store(payload []byte, kind, suggestedName string, event plugin.E
 	}
 
 	s.seen[sum] = sample
+	s.order = append(s.order, sum)
+
+	// Bound the table: the oldest entries are dropped first.
+	for len(s.order) > maxKnownSamples {
+		oldest := s.order[0]
+		s.order = s.order[1:]
+		delete(s.seen, oldest)
+	}
+
 	return nil
 }
 

@@ -103,6 +103,29 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 							return
 						}
 					}
+
+					// The command matched no rule: it is recorded anyway.
+					// The commands an attacker types that the decoy did not
+					// anticipate are the reconnaissance ones, and they are
+					// the ones worth keeping.
+					tr.TraceEvent(tracer.Event{
+						Msg:            "SSH Raw Command",
+						Protocol:       tracer.SSH.String(),
+						RemoteAddr:     sess.RemoteAddr().String(),
+						SourceIp:       host,
+						SourcePort:     port,
+						Status:         tracer.Start.String(),
+						ID:             uuidSession.String(),
+						SessionID:      connID,
+						ConnID:         connID,
+						CorrelationKey: correlationKey,
+						Environ:        strings.Join(sess.Environ(), ","),
+						User:           sess.User(),
+						Description:    servConf.Description,
+						Command:        sess.RawCommand(),
+						CommandOutput:  "command not found",
+						Handler:        "not_found",
+					})
 				}
 
 				tr.TraceEvent(tracer.Event{
@@ -135,8 +158,10 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 					if commandInput == "exit" {
 						break
 					}
+					matched := false
 					for _, command := range servConf.Commands {
 						if command.Regex.MatchString(commandInput) {
+							matched = true
 							commandOutput := command.Handler
 							var metadata map[string]string
 							if command.Plugin != "" {
@@ -186,6 +211,31 @@ func (sshStrategy *SSHStrategy) Init(servConf parser.BeelzebubServiceConfigurati
 							})
 							break // Inner range over commands.
 						}
+					}
+
+					// The command matched no rule: it is recorded anyway.
+					// A decoy that drops the commands it does not know how
+					// to answer loses the evidence of the reconnaissance.
+					if !matched {
+						commandOutput := "command not found"
+						terminal.Write([]byte(commandOutput + "\n"))
+
+						tr.TraceEvent(tracer.Event{
+							Msg:            "SSH Terminal Session Interaction",
+							RemoteAddr:     sess.RemoteAddr().String(),
+							SourceIp:       host,
+							SourcePort:     port,
+							Status:         tracer.Interaction.String(),
+							Command:        commandInput,
+							CommandOutput:  commandOutput,
+							ID:             uuidSession.String(),
+							SessionID:      connID,
+							ConnID:         connID,
+							CorrelationKey: correlationKey,
+							Protocol:       tracer.SSH.String(),
+							Description:    servConf.Description,
+							Handler:        "not_found",
+						})
 					}
 				}
 

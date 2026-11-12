@@ -95,6 +95,12 @@ func newHTTPHandler(servConf parser.BeelzebubServiceConfiguration, tr tracer.Tra
 					resp.StatusCode = 500
 					resp.Body = "500 Internal Server Error"
 				}
+			} else {
+				// The request matched no rule and the service has no
+				// fallback: the interaction is still recorded. A decoy that
+				// drops the requests it does not know how to answer loses
+				// the evidence of exactly the probes it did not anticipate.
+				traceRequest(request, tr, parser.Command{}, servConf, "", servConf.TrustedProxiesNets, nil, "")
 			}
 		}
 		setResponseHeaders(responseWriter, resp.Headers, resp.StatusCode)
